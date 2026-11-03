@@ -1,0 +1,50 @@
+# Local development stack. Secrets come from .env (never committed).
+x-backend: &backend
+  build: ./backend
+  env_file: [.env]
+  environment:
+    DATABASE_URL: postgresql+psycopg://gtm:gtm@db:5432/gtm
+  depends_on:
+    migrate: { condition: service_completed_successfully }
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: gtm
+      POSTGRES_PASSWORD: gtm
+      POSTGRES_DB: gtm
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gtm -d gtm"]
+      interval: 3s
+      retries: 20
+
+  migrate:
+    build: ./backend
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://gtm:gtm@db:5432/gtm
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db: { condition: service_healthy }
+
+  api:
+    <<: *backend
+    ports: ["8000:8000"]
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker.main"]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports: ["3000:3000"]
+    depends_on: [api]
+
+volumes:
+  pgdata:
