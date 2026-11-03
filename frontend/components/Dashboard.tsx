@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   api, CATEGORY_LABEL, groupByCategory,
-  runProgress, type Category, type Connector, type Draft, type Evidence, type Metrics,
+  runProgress, type AiStatus, type AiUsage, type Category, type Connector, type Draft, type Evidence, type Metrics,
   type Opportunity, type Profile, type Run,
 } from "@/lib/api";
 
@@ -13,6 +13,8 @@ export default function Dashboard() {
   const [runs, setRuns] = useState<Run[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
+  const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
+  const [aiUsage, setAiUsage] = useState<AiUsage | null>(null);
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -20,12 +22,12 @@ export default function Dashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [m, o, r, d, e, c, p] = await Promise.all([
+      const [m, o, r, d, e, c, p, ai, au] = await Promise.all([
         api.metrics(), api.opportunities(), api.runs(), api.drafts(),
-        api.evidence(), api.connectors(), api.profiles(),
+        api.evidence(), api.connectors(), api.profiles(), api.aiStatus(), api.aiUsage(),
       ]);
       setMetrics(m); setOpps(o); setRuns(r); setDrafts(d);
-      setEvidence(e); setConnectors(c); setProfiles(p); setError(null);
+      setEvidence(e); setConnectors(c); setProfiles(p); setAiStatus(ai); setAiUsage(au); setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "API unreachable");
     }
@@ -106,6 +108,24 @@ export default function Dashboard() {
                 {(r.state.errors ?? []).map((e) => <div className="err" key={e}>{e}</div>)}
               </div>
             </div>
+          ))}
+        </div>
+        <div className="card">
+          <h2>AI ({aiStatus?.provider ?? "–"})</h2>
+          <div>
+            <span className="badge">{aiStatus?.mode ?? "–"} mode</span>
+            <span className="badge">{aiStatus?.would_make_paid_calls ? "PAID CALLS ACTIVE" : "no paid calls"}</span>
+          </div>
+          <div className="muted">
+            {aiUsage ? `${aiUsage.calls} calls · ${aiUsage.input_tokens} in / ${aiUsage.output_tokens} out tokens · $${aiUsage.cost_usd.toFixed(4)}` : "–"}
+          </div>
+          {aiStatus && !aiStatus.would_make_paid_calls && (
+            <div className="muted">
+              Live needs: mock off, paid enabled{aiStatus.api_key_configured ? "" : ", API key"}{aiStatus.model ? "" : ", model"}{aiStatus.prices_configured ? "" : ", prices"}.
+            </div>
+          )}
+          {(aiUsage?.by_task ?? []).map((t) => (
+            <div className="item" key={t.task + t.outcome}>{t.task} <span className="badge">{t.outcome}</span> <span className="muted">{t.calls}×</span></div>
           ))}
         </div>
         <div className="card">

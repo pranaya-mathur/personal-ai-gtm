@@ -1,16 +1,14 @@
 from app.core.config import Settings
-from app.llm.anthropic_client import AnthropicLLM
 from app.llm.base import LLMClient
 from app.llm.mock import MockLLM
+from app.llm.openai_client import OpenAILLM
 
 
 def build_llm(settings: Settings) -> LLMClient:
-    if settings.llm_provider == "mock":
+    if settings.llm_mock_mode:
         return MockLLM()
-    if settings.llm_provider == "anthropic":
-        return AnthropicLLM(
-            settings.anthropic_api_key,
-            settings.anthropic_model,
-            settings.llm_paid_calls_enabled,
+    if settings.llm_provider == "openai":
+        return OpenAILLM(
+            settings.openai_api_key, settings.openai_model, settings.llm_paid_calls_enabled
         )
-    raise ValueError(f"Unknown LLM_PROVIDER: {settings.llm_provider!r} (use 'mock' or 'anthropic')")
+    raise ValueError(f"Unknown LLM_PROVIDER: {settings.llm_provider!r} (supported: 'openai')")

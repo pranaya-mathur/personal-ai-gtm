@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.connectors.base import DiscoveryConnector
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.llm import LLMClient
 from app.models import WorkflowRun
 from app.models.enums import RunStatus
 from app.orchestrator.graph import WorkflowState, build_graph
@@ -71,11 +72,14 @@ def execute_run(
     connectors: list[DiscoveryConnector],
     settings: Settings,
     checker: SourceChecker | None = None,
+    llm: LLMClient | None = None,
 ) -> WorkflowRun:
     run = session.get(WorkflowRun, run_id)
     assert run is not None
     try:
-        graph = build_graph(session, connectors, SpendGuard(session, settings), settings, checker)
+        graph = build_graph(
+            session, connectors, SpendGuard(session, settings), settings, checker, llm
+        )
         state: WorkflowState = (
             WorkflowState(**run.state)  # type: ignore[typeddict-item]
             if run.state.get("completed_nodes")

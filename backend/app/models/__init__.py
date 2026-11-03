@@ -1,8 +1,10 @@
 from app.models.entities import (
+    AiAnalysis,
     Contact,
     Deal,
     Evidence,
     Interaction,
+    LlmUsage,
     Opportunity,
     OpportunityEvidence,
     Organization,
@@ -14,10 +16,12 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "AiAnalysis",
     "Contact",
     "Deal",
     "Evidence",
     "Interaction",
+    "LlmUsage",
     "Opportunity",
     "OpportunityEvidence",
     "Organization",

@@ -128,3 +128,23 @@ def test_search_profiles_drive_runs(client, pg_url) -> None:  # type: ignore[no-
         client.patch(f"/search-profiles/{pid}", json={"enabled": False}).json()["enabled"] is False
     )
     assert client.post("/runs", json={"profile_id": pid}).status_code == 409
+
+
+def test_ai_pipeline_on_postgres_mock_mode(client, pg_url) -> None:  # type: ignore[no-untyped-def]
+    status = client.get("/ai/status").json()
+    assert status["provider"] == "openai" and status["mode"] == "mock"
+    assert status["would_make_paid_calls"] is False and "openai_api_key" not in str(status)
+
+    client.post("/runs", json={})
+    _process_queue(pg_url)
+    usage = client.get("/ai/usage").json()
+    assert usage["calls"] > 0 and usage["cost_usd"] == 0 and usage["input_tokens"] > 0
+    assert {t["task"] for t in usage["by_task"]} >= {"opportunity_analysis", "outreach_draft"}
+
+    demand = client.get("/opportunities", params={"category": "confirmed_demand"}).json()
+    fresh = next(o for o in demand if o["verification_status"] != "stale")
+    analyses = client.get(f"/opportunities/{fresh['id']}/analyses").json()
+    assert analyses and all(a["validated"] for a in analyses)
+    ev_ids = {e["id"] for e in client.get(f"/opportunities/{fresh['id']}").json()["evidence"]}
+    first = next(a for a in analyses if a["task"] == "opportunity_analysis")["output"]
+    assert first["claims"][0]["evidence_id"] in ev_ids  # claims cite stored evidence

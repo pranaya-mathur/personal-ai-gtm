@@ -3,6 +3,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai.tasks import AITasks
 from app.models import (
     Contact,
     Evidence,
@@ -12,14 +13,17 @@ from app.models import (
     OutreachDraft,
 )
 from app.models.enums import OpportunityStatus, OutreachStatus
+from app.services.spend import SpendLimitExceeded
 
 
 class OutreachIntelligenceAgent:
     """Prepares drafts for human review. It never sends, and every draft is created in
     PENDING_APPROVAL. Text uses only facts held in evidence; unknowns stay as placeholders."""
 
-    def __init__(self, session: Session) -> None:
-        self.session = session
+    def __init__(
+        self, session: Session, tasks: AITasks | None = None, run_id: uuid.UUID | None = None
+    ) -> None:
+        self.session, self.tasks, self.run_id = session, tasks, run_id
 
     def run(self, qualified: dict[str, dict[str, object]]) -> list[str]:
         draft_ids: list[str] = []
@@ -66,10 +70,20 @@ class OutreachIntelligenceAgent:
                 + ".\n\n[YOUR RELEVANT EXPERIENCE - to be written by you]\n\n"
                 "[PROPOSED NEXT STEP]\n"
             )
+            subject = f"Re: {opp.title}"
+            if self.tasks is not None:
+                try:
+                    ai_draft = self.tasks.draft(
+                        opp, self.run_id, contact.full_name if contact else None
+                    )
+                except SpendLimitExceeded:
+                    ai_draft = None  # budget exhausted: keep the evidence-only template
+                if ai_draft is not None:
+                    subject, body = ai_draft.subject, ai_draft.body
             draft = OutreachDraft(
                 opportunity_id=opp.id,
                 contact_id=contact.id if contact else None,
-                subject=f"Re: {opp.title}",
+                subject=subject,
                 body=body,
                 status=OutreachStatus.PENDING_APPROVAL,
             )

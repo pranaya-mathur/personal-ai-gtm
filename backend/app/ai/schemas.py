@@ -1,0 +1,64 @@
+"""Strict output schemas for every AI task.
+
+Kept deliberately simple (all fields required, no JSON-schema constraint keywords) so they are
+valid for OpenAI strict Structured Outputs. Range and grounding rules are enforced afterwards in
+`ai/claims.py`, never trusted to the model.
+"""
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class Claim(_Strict):
+    """A commercial/factual statement. Must be backed by a verbatim quote from one evidence item."""
+
+    text: str
+    evidence_id: str
+    quote: str
+
+
+class OpportunityAnalysis(_Strict):
+    summary: str
+    claims: list[Claim]
+
+
+class RequirementExtraction(_Strict):
+    requirements: list[Claim]  # only needs the source explicitly states
+    budget: Claim | None
+    deadline: Claim | None
+
+
+class EvidenceEvaluation(_Strict):
+    verdict: Literal["supported", "partially_supported", "unsupported"]
+    reliability: float  # 0..1
+    issues: list[str]
+    supporting: list[Claim]
+
+
+class ResearchBrief(_Strict):
+    findings: list[Claim]
+    open_questions: list[str]  # things the evidence does NOT answer
+
+
+class CriterionAssessment(_Strict):
+    name: str
+    score: float  # 0..100
+    rationale: str
+    support: Claim
+
+
+class QualificationAssessment(_Strict):
+    fit_score: float  # 0..100
+    criteria: list[CriterionAssessment]
+    risks: list[str]
+
+
+class OutreachDraftAI(_Strict):
+    subject: str
+    body: str
+    claims: list[Claim]  # every factual statement about the recipient/opportunity in `body`

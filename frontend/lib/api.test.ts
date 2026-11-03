@@ -22,7 +22,7 @@ describe("runProgress", () => {
   });
   it("reports percent of workflow nodes completed", () => {
     expect(runProgress(run([]))).toBe(0);
-    expect(runProgress(run(["a", "b", "c"]))).toBe(43);
-    expect(runProgress(run(Array(7).fill("x")))).toBe(100);
+    expect(runProgress(run(["a", "b", "c"]))).toBe(38);
+    expect(runProgress(run(Array(8).fill("x")))).toBe(100);
   });
 });

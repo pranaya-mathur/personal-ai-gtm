@@ -1,7 +1,7 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Opportunity, OutreachDraft, ProviderSpend
+from app.models import LlmUsage, Opportunity, OutreachDraft, ProviderSpend
 
 
 class PipelineAnalyticsAgent:
@@ -27,7 +27,17 @@ class PipelineAnalyticsAgent:
         spend = self.session.execute(
             select(func.coalesce(func.sum(ProviderSpend.amount_usd), 0))
         ).scalar_one()
+        tok_in, tok_out, llm_cost = self.session.execute(
+            select(
+                func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+                func.coalesce(func.sum(LlmUsage.cost_usd), 0),
+            )
+        ).one()
         return {
+            "llm_input_tokens": int(tok_in),
+            "llm_output_tokens": int(tok_out),
+            "llm_cost_usd": float(llm_cost),
             "opportunities_by_category": by_category,
             "opportunities_by_status": by_status,
             "drafts_pending_approval": pending,

@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.agents.analytics import PipelineAnalyticsAgent
@@ -11,7 +11,9 @@ from app.connectors.registry import known_connectors
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import (
+    AiAnalysis,
     Evidence,
+    LlmUsage,
     Opportunity,
     OpportunityEvidence,
     OutreachDraft,
@@ -21,6 +23,7 @@ from app.models import (
 from app.models.enums import OpportunityCategory, OutreachStatus, VerificationStatus
 from app.orchestrator.runner import enqueue_run
 from app.schemas.api import (
+    AnalysisOut,
     ApprovalRequest,
     DraftOut,
     DraftUpdate,
@@ -71,6 +74,70 @@ def connectors() -> list[dict[str, object]]:
             }
         )
     return out
+
+
+@router.get("/ai/status")
+def ai_status() -> dict[str, object]:
+    """What the AI layer would do right now. Never exposes secrets."""
+    s = get_settings()
+    key_set = bool(s.openai_api_key and s.openai_api_key.get_secret_value())
+    prices = s.openai_input_usd_per_mtok is not None and s.openai_output_usd_per_mtok is not None
+    live_ready = (
+        not s.llm_mock_mode
+        and s.llm_paid_calls_enabled
+        and key_set
+        and bool(s.openai_model)
+        and prices
+    )
+    return {
+        "provider": s.llm_provider,
+        "mode": "mock" if s.llm_mock_mode else "live",
+        "paid_calls_enabled": s.llm_paid_calls_enabled,
+        "api_key_configured": key_set,
+        "model": s.openai_model or None,
+        "prices_configured": prices,
+        "would_make_paid_calls": live_ready,
+        "per_run_llm_limit_usd": s.llm_spend_limit_per_run_usd,
+        "max_opportunities_per_run": s.ai_max_opportunities_per_run,
+    }
+
+
+@router.get("/ai/usage")
+def ai_usage(db: Session = Depends(get_db)) -> dict[str, object]:
+    totals = db.execute(
+        select(
+            func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+            func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+            func.coalesce(func.sum(LlmUsage.cost_usd), 0),
+            func.count(),
+        )
+    ).one()
+    by_task = db.execute(
+        select(LlmUsage.task, LlmUsage.outcome, func.count(), func.sum(LlmUsage.cost_usd)).group_by(
+            LlmUsage.task, LlmUsage.outcome
+        )
+    ).all()
+    return {
+        "input_tokens": int(totals[0]),
+        "output_tokens": int(totals[1]),
+        "cost_usd": float(totals[2]),
+        "calls": int(totals[3]),
+        "by_task": [
+            {"task": t, "outcome": o, "calls": int(n), "cost_usd": float(c or 0)}
+            for t, o, n, c in by_task
+        ],
+    }
+
+
+@router.get("/opportunities/{opp_id}/analyses", response_model=list[AnalysisOut])
+def opportunity_analyses(opp_id: uuid.UUID, db: Session = Depends(get_db)) -> list[AiAnalysis]:
+    return list(
+        db.execute(
+            select(AiAnalysis)
+            .where(AiAnalysis.opportunity_id == opp_id)
+            .order_by(AiAnalysis.created_at)
+        ).scalars()
+    )
 
 
 @router.get("/search-profiles", response_model=list[ProfileOut])

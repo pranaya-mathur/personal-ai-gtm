@@ -106,3 +106,14 @@ class ApprovalRequest(BaseModel):
 class DraftUpdate(BaseModel):
     subject: str | None = None
     body: str = Field(min_length=1)
+
+
+class AnalysisOut(ORM):
+    id: uuid.UUID
+    task: str
+    provider: str
+    model: str
+    output: dict[str, Any] | None
+    validated: bool
+    rejection_reason: str | None
+    created_at: datetime

@@ -22,7 +22,7 @@ export interface Run {
   state: { completed_nodes?: string[]; errors?: string[] };
 }
 
-export const TOTAL_NODES = 7;
+export const TOTAL_NODES = 8;
 
 export interface Evidence {
   id: string;
@@ -56,6 +56,25 @@ export interface Profile {
   connector_names: string[];
   max_results: number;
   enabled: boolean;
+}
+
+export interface AiStatus {
+  provider: string;
+  mode: "mock" | "live";
+  paid_calls_enabled: boolean;
+  api_key_configured: boolean;
+  model: string | null;
+  prices_configured: boolean;
+  would_make_paid_calls: boolean;
+  per_run_llm_limit_usd: number;
+}
+
+export interface AiUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  calls: number;
+  by_task: { task: string; outcome: string; calls: number; cost_usd: number }[];
 }
 
 export function runProgress(r: Run): number {
@@ -104,6 +123,8 @@ export const api = {
       body: JSON.stringify(profileId ? { profile_id: profileId } : {}),
     }),
   evidence: () => request<Evidence[]>("/evidence"),
+  aiStatus: () => request<AiStatus>("/ai/status"),
+  aiUsage: () => request<AiUsage>("/ai/usage"),
   connectors: () => request<Connector[]>("/connectors"),
   profiles: () => request<Profile[]>("/search-profiles"),
 };

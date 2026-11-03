@@ -11,14 +11,18 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session
 
+from app.agents.ai_analysis import AIAnalysisAgent
 from app.agents.analytics import PipelineAnalyticsAgent
 from app.agents.discovery import AgencyPartnershipIntelligenceAgent, OpportunityIntelligenceAgent
 from app.agents.outreach import OutreachIntelligenceAgent
 from app.agents.qualification import QualificationAgent
 from app.agents.research import ResearchEvidenceAgent
+from app.ai.gateway import LLMGateway
+from app.ai.tasks import AITasks
 from app.connectors.base import DiscoveryConnector, DiscoveryQuery
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.llm import LLMClient, build_llm
 from app.services.source_check import SourceChecker
 from app.services.source_verification import verify_sources
 from app.services.spend import SpendGuard
@@ -30,6 +34,7 @@ NODE_ORDER = [
     "agency_partnership_intelligence",
     "source_verification",
     "research_evidence",
+    "ai_analysis",
     "qualification",
     "outreach_intelligence",
     "pipeline_analytics",
@@ -42,6 +47,8 @@ class WorkflowState(TypedDict, total=False):
     opportunity_ids: list[str]
     errors: list[str]
     source_checks: dict[str, Any]
+    ai: dict[str, Any]
+    ai_results: dict[str, dict[str, Any]]
     research: dict[str, dict[str, Any]]
     qualified: dict[str, dict[str, Any]]
     draft_ids: list[str]
@@ -55,7 +62,12 @@ def build_graph(
     spend: SpendGuard,
     settings: Settings,
     checker: SourceChecker | None = None,
+    llm: LLMClient | None = None,
 ) -> Any:
+    gateway = LLMGateway(session, settings, llm or build_llm(settings), spend)
+    ai_ready, ai_reason = gateway.availability()
+    tasks = AITasks(session, gateway) if ai_ready else None
+
     def step(name: str, fn: Callable[[WorkflowState], dict[str, Any]]) -> Callable[..., Any]:
         def wrapped(state: WorkflowState) -> dict[str, Any]:
             done = list(state.get("completed_nodes", []))
@@ -90,11 +102,26 @@ def build_graph(
     def research(state: WorkflowState) -> dict[str, Any]:
         return {"research": ResearchEvidenceAgent(session).run(state.get("opportunity_ids", []))}
 
+    def ai_analysis(state: WorkflowState) -> dict[str, Any]:
+        if tasks is None:
+            return {"ai": {"skipped": ai_reason}}
+        out = AIAnalysisAgent(session, tasks, settings).run(
+            state.get("opportunity_ids", []), uuid.UUID(state["run_id"])
+        )
+        return {
+            "ai": {k: v for k, v in out.items() if k != "results"},
+            "ai_results": out["results"],
+        }
+
     def qualification(state: WorkflowState) -> dict[str, Any]:
-        return {"qualified": QualificationAgent(session).run(state.get("research", {}))}
+        agent = QualificationAgent(
+            session, tasks, state.get("ai_results", {}), uuid.UUID(state["run_id"])
+        )
+        return {"qualified": agent.run(state.get("research", {}))}
 
     def outreach(state: WorkflowState) -> dict[str, Any]:
-        return {"draft_ids": OutreachIntelligenceAgent(session).run(state.get("qualified", {}))}
+        agent = OutreachIntelligenceAgent(session, tasks, uuid.UUID(state["run_id"]))
+        return {"draft_ids": agent.run(state.get("qualified", {}))}
 
     def analytics(state: WorkflowState) -> dict[str, Any]:
         return {"metrics": PipelineAnalyticsAgent(session).run()}
@@ -104,6 +131,7 @@ def build_graph(
         "agency_partnership_intelligence": discovery(AgencyPartnershipIntelligenceAgent),
         "source_verification": source_verification,
         "research_evidence": research,
+        "ai_analysis": ai_analysis,
         "qualification": qualification,
         "outreach_intelligence": outreach,
         "pipeline_analytics": analytics,

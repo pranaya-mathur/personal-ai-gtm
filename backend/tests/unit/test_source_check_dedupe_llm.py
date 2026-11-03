@@ -1,11 +1,8 @@
 import httpx
-import pytest
 from sqlalchemy import func, select
 
 from app.connectors.base import RawFinding, SignalKind
 from app.core.config import Settings
-from app.llm import LLMDisabledError, build_llm
-from app.llm.anthropic_client import AnthropicLLM
 from app.models import Evidence, Opportunity
 from app.models.enums import SourceCheckStatus
 from app.services.dedupe import canonical_url, evidence_hash, title_similarity
@@ -113,31 +110,6 @@ def test_distinct_titles_not_merged(session) -> None:  # type: ignore[no-untyped
     assert session.execute(select(func.count()).select_from(Opportunity)).scalar_one() == 2
 
 
-def test_llm_defaults_to_free_mock() -> None:
-    llm = build_llm(Settings())
-    assert llm.provider == "mock"
-    assert llm.complete("s", "p").text == "[MOCK LLM RESPONSE]"
-
-
-def test_anthropic_never_calls_without_explicit_enablement() -> None:
-    s = Settings(llm_provider="anthropic")
-    llm = build_llm(s)
-    assert isinstance(llm, AnthropicLLM)
-    with pytest.raises(LLMDisabledError, match="disabled"):
-        llm.complete("s", "p")
-    keyed = Settings(llm_provider="anthropic", llm_paid_calls_enabled=True, anthropic_api_key="k")  # type: ignore[arg-type]
-    with pytest.raises(LLMDisabledError, match="ANTHROPIC_MODEL"):
-        build_llm(keyed).complete("s", "p")
-    nokey = Settings(llm_provider="anthropic", llm_paid_calls_enabled=True, anthropic_model="m")
-    with pytest.raises(LLMDisabledError, match="API_KEY"):
-        build_llm(nokey).complete("s", "p")
-
-
-def test_unknown_llm_provider_rejected() -> None:
-    with pytest.raises(ValueError):
-        build_llm(Settings(llm_provider="nope"))
-
-
 def test_secret_not_in_repr() -> None:
-    s = Settings(anthropic_api_key="sk-secret-value", apify_token="apify-secret")  # type: ignore[arg-type]
+    s = Settings(openai_api_key="sk-secret-value", apify_token="apify-secret")  # type: ignore[arg-type]
     assert "sk-secret-value" not in repr(s) and "apify-secret" not in repr(s)

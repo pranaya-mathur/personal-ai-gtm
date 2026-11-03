@@ -1,9 +1,12 @@
 import uuid
+from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.ai.tasks import AITasks
 from app.models import Opportunity, Qualification
 from app.models.enums import OpportunityCategory, OpportunityStatus, VerificationStatus
+from app.services.spend import SpendLimitExceeded
 
 CATEGORY_WEIGHT = {
     OpportunityCategory.CONFIRMED_DEMAND: 1.0,
@@ -31,8 +34,17 @@ def score_opportunity(
 
 
 class QualificationAgent:
-    def __init__(self, session: Session) -> None:
-        self.session = session
+    AI_WEIGHT = 0.4  # blend: (1-w) deterministic rubric + w validated AI fit score
+
+    def __init__(
+        self,
+        session: Session,
+        tasks: AITasks | None = None,
+        ai_results: dict[str, dict[str, Any]] | None = None,
+        run_id: uuid.UUID | None = None,
+    ) -> None:
+        self.session, self.tasks = session, tasks
+        self.ai_results, self.run_id = ai_results or {}, run_id
 
     def run(self, research: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
         out: dict[str, dict[str, object]] = {}
@@ -40,11 +52,47 @@ class QualificationAgent:
             opp = self.session.get(Opportunity, uuid.UUID(oid))
             if opp is None:
                 continue
-            score, criteria = score_opportunity(opp.category, opp.confidence, rep)
+            det_score, det_criteria = score_opportunity(opp.category, opp.confidence, rep)
+            score: float = det_score
+            criteria: dict[str, Any] = dict(det_criteria)
             stale = opp.verification_status == VerificationStatus.STALE
+            ai = self.ai_results.get(oid)
+            ai_unsupported = bool(ai and ai.get("verdict") == "unsupported")
+            note = ""
+            if self.tasks is not None and ai and not ai_unsupported and not stale:
+                try:
+                    assessment = self.tasks.assess(opp, self.run_id)
+                except SpendLimitExceeded as exc:
+                    assessment, note = None, f"; AI qualification skipped ({exc})"
+                if assessment is not None:
+                    score = round(
+                        (1 - self.AI_WEIGHT) * det_score + self.AI_WEIGHT * assessment.fit_score, 1
+                    )
+                    criteria["deterministic_score"] = det_score
+                    criteria["ai_fit_score"] = assessment.fit_score
+                    criteria["ai_risks"] = assessment.risks
+                    criteria["ai_criteria"] = [
+                        {
+                            "name": c.name,
+                            "score": c.score,
+                            "rationale": c.rationale,
+                            "evidence_id": c.support.evidence_id,
+                            "quote": c.support.quote,
+                        }
+                        for c in assessment.criteria
+                    ]
+            numeric = ", ".join(
+                f"{k}={v:g}" for k, v in criteria.items() if isinstance(v, int | float)
+            )
             rationale = (
-                f"score={score} from {', '.join(f'{k}={v:g}' for k, v in criteria.items())}"
+                f"score={score} from {numeric}"
                 + ("; evidence is stale" if stale else "")
+                + (
+                    "; AI judged the evidence does not support this opportunity"
+                    if ai_unsupported
+                    else ""
+                )
+                + note
             )
             self.session.add(
                 Qualification(
@@ -54,7 +102,7 @@ class QualificationAgent:
             if opp.status == OpportunityStatus.NEW:
                 if stale:
                     opp.status = OpportunityStatus.DISQUALIFIED
-                elif score >= QUALIFY_THRESHOLD:
+                elif score >= QUALIFY_THRESHOLD and not ai_unsupported:
                     opp.status = OpportunityStatus.QUALIFIED
             out[oid] = {"score": score, "status": opp.status}
         self.session.flush()

@@ -278,3 +278,44 @@ class SearchProfile(Base, IdMixin, TimestampMixin):
     max_results: Mapped[int] = mapped_column(Integer, default=25, nullable=False)
     max_age_days: Mapped[int] = mapped_column(Integer, default=90, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class LlmUsage(Base, IdMixin):
+    """Token + cost ledger for every LLM attempt (accepted or rejected)."""
+
+    __tablename__ = "llm_usage"
+    __table_args__ = (Index("ix_llm_usage_run", "run_id"),)
+
+    run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("workflow_runs.id"))
+    opportunity_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("opportunities.id"))
+    task: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_usd: Mapped[float] = mapped_column(Numeric(14, 8), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)  # accepted | rejected
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+
+class AiAnalysis(Base, IdMixin):
+    """Persisted AI output with its validation verdict. Rejected outputs are kept for audit."""
+
+    __tablename__ = "ai_analyses"
+    __table_args__ = (Index("ix_ai_analyses_opportunity", "opportunity_id"),)
+
+    opportunity_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("opportunities.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("workflow_runs.id"))
+    task: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    output: Mapped[dict | None] = mapped_column(JsonType)  # type: ignore[type-arg]
+    validated: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )

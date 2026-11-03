@@ -18,11 +18,22 @@ class Settings(BaseSettings):
     spend_limit_daily_usd: float = 5.00
     spend_limit_monthly_usd: float = 50.00
 
-    # LLM: Anthropic Claude is the intended primary provider; "mock" runs offline for free.
-    llm_provider: str = "mock"
+    # LLM: OpenAI is the default provider. Mock mode (default) is offline and free; a live call
+    # needs mock mode OFF, paid calls enabled, an API key, an explicit model and explicit prices.
+    llm_provider: str = "openai"
+    llm_mock_mode: bool = True
     llm_paid_calls_enabled: bool = False
-    anthropic_api_key: SecretStr | None = None
-    anthropic_model: str = ""
+    openai_api_key: SecretStr | None = None
+    openai_model: str = ""
+    # Prices are supplied by you (USD per 1M tokens); none are assumed. Cost tracking and spend
+    # limits refuse live calls while these are unset.
+    openai_input_usd_per_mtok: float | None = None
+    openai_output_usd_per_mtok: float | None = None
+    llm_max_output_tokens: int = 1500
+    llm_max_retries: int = 3
+    llm_retry_base_seconds: float = 0.5
+    llm_spend_limit_per_run_usd: float = 0.50
+    ai_max_opportunities_per_run: int = 10
 
     # Apify: nothing paid runs unless the token is set AND paid execution is approved.
     apify_token: SecretStr | None = None
