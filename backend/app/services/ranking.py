@@ -22,12 +22,13 @@ def score_buyer(
     age_days: int | None = None,
 ) -> tuple[float, dict[str, float]]:
     """Direct-buyer ranking: active confirmed demand outranks speculative keyword density."""
-    intent = {
+    intent_by_triage: dict[str, float] = {
         Triage.ACTIONABLE: 40.0,
         Triage.NEEDS_VERIFICATION: 18.0,
         Triage.REJECTED: 0.0,
         Triage.UNASSESSED: 5.0,
-    }.get(triage, 5.0)
+    }
+    intent = intent_by_triage.get(triage, 5.0)
     if category == OpportunityCategory.SPECULATIVE_PROSPECT:
         intent = min(intent, 8.0)
     elif category == OpportunityCategory.CONFIRMED_DEMAND and triage == Triage.ACTIONABLE:
@@ -37,7 +38,9 @@ def score_buyer(
         "buying_intent": intent,
         "source_confidence": confidence * 15,
         "freshness": _freshness(research, age_days),
-        "contactability": 12.0 if research.get("known_contacts") or research.get("has_contact_route") else 0.0,
+        "contactability": 12.0
+        if research.get("known_contacts") or research.get("has_contact_route")
+        else 0.0,
         "source_confirmed": 8.0 if research.get("source_confirmed") else 0.0,
         "dated_and_sourced": 10.0
         if research.get("has_publication_date") and research.get("has_source_url")
@@ -71,13 +74,16 @@ def score_agency(
         "partner_intent": model,
         "source_confidence": confidence * 15,
         "freshness": _freshness(research, age_days),
-        "contactability": 15.0 if research.get("known_contacts") or research.get("has_contact_route") else 0.0,
+        "contactability": 15.0
+        if research.get("known_contacts") or research.get("has_contact_route")
+        else 0.0,
         "source_confirmed": 8.0 if research.get("source_confirmed") else 0.0,
         "dated_and_sourced": 10.0
         if research.get("has_publication_date") and research.get("has_source_url")
         else 0.0,
         "relationship_potential": 8.0
-        if category in (OpportunityCategory.VERIFIED_PARTNERSHIP, OpportunityCategory.CONFIRMED_DEMAND)
+        if category
+        in (OpportunityCategory.VERIFIED_PARTNERSHIP, OpportunityCategory.CONFIRMED_DEMAND)
         else 0.0,
     }
     return round(sum(criteria.values()), 1), criteria

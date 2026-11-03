@@ -355,7 +355,8 @@ class ApifySearchIntentConnector(SearchIntentConnector):
                 getattr(self, "on_run_submitted", None),
             )
             used = run.get("usageTotalUsd")
-            cost += float(used) if isinstance(used, int | float) else cap
+            expected = self._run_cost(engine, len(queries))  # published per-page/result price
+            cost += max(float(used) if isinstance(used, int | float) else 0.0, expected)
             for item in client.dataset_items(run["defaultDatasetId"], 50):
                 for r in item.get("organicResults") or []:
                     url = r.get("url") or ""

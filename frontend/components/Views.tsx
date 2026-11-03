@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
-  api, jobTotals, splitReal, viewRows,
+  api, jobTotals, splitReal, STAGE_LABEL, viewRows,
   type AiUsage, type Analysis, type BoardRow, type CostSummary, type Deal, type Filters, NO_FILTERS, type RouteRow, type SourcePerformance, type OpportunityDetail, type RecordView, type Run,
 } from "@/lib/api";
 
@@ -82,7 +82,7 @@ export function RecordsView({
                 <td>{r.organization ?? "unknown"}{r.organization_kind === "agency" ? " (agency)" : ""}</td>
                 <td>{r.country ?? "unknown"}</td>
                 <td><a href="#" onClick={(e) => { e.preventDefault(); onOpen(r.id); }}>{r.title}</a>
-                  <div className="muted">{r.channel === "agency" ? "agency channel" : "direct buyer"} · {r.project_type.replace("_", " ")} · {r.verification_status}{r.deadline ? ` · deadline ${new Date(r.deadline).toLocaleDateString()}` : ""}</div></td>
+                  <div className="muted">{r.channel === "agency" ? "agency channel" : r.channel === "proactive_buyer" ? "proactive prospect (trigger)" : "direct buyer"} · {r.project_type.replace("_", " ")} · {r.verification_status}{r.deadline ? ` · deadline ${new Date(r.deadline).toLocaleDateString()}` : ""}</div></td>
                 <td>{r.evidence_excerpt && <blockquote>{r.evidence_excerpt}</blockquote>}
                   {r.source_url && <a href={r.source_url} target="_blank" rel="noopener noreferrer">source ({r.evidence_count})</a>}</td>
                 <td><Stage r={r} /></td>
@@ -131,7 +131,7 @@ export function OperationsView({ runs, onCancel }: { runs: Run[]; onCancel: (id:
   );
 }
 
-export function ResearchDetail({ id, row }: { id: string | null; row: BoardRow | undefined }) {
+export function ResearchDetail({ id, row, onChanged }: { id: string | null; row: BoardRow | undefined; onChanged?: () => void }) {
   const [detail, setDetail] = useState<OpportunityDetail | null>(null);
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -148,6 +148,8 @@ export function ResearchDetail({ id, row }: { id: string | null; row: BoardRow |
   if (error) return <section className="card"><p className="err">Could not load record: {error}</p></section>;
   if (!detail) return <section className="card"><span className="muted">Loading…</span></section>;
   return (
+    <>
+    <FitPanel id={id} onChanged={onChanged ?? (() => undefined)} />
     <section className="grid cols3">
       <div className="card">
         <h2>{detail.title} {row?.is_mock && MOCK_BADGE}</h2>
@@ -185,6 +187,7 @@ export function ResearchDetail({ id, row }: { id: string | null; row: BoardRow |
         ))}
       </div>
     </section>
+    </>
   );
 }
 
@@ -450,5 +453,65 @@ export function EngagementView({
         )}
       </section>
     </>
+  );
+}
+
+
+export function FitPanel({ id, onChanged }: { id: string; onChanged: () => void }) {
+  const [fit, setFit] = useState<import("@/lib/api").Fit | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { setFit(null); setErr(null); api.fit(id).then(setFit).catch((e: unknown) => setErr(e instanceof Error ? e.message : "failed")); }, [id]);
+  async function act(label: string, fn: () => Promise<unknown>) {
+    setNote(null);
+    try { await fn(); setNote(`${label}: done. Nothing was sent; it waits for your review.`); onChanged(); }
+    catch (e) { setNote(`${label}: ${e instanceof Error ? e.message : "failed"}`); }
+  }
+  if (err) return <section className="card"><p className="err">Fit unavailable: {err}</p></section>;
+  if (!fit) return <section className="card"><span className="muted">Loading fit…</span></section>;
+  return (
+    <section className="card">
+      <h2>Fit &amp; approach <span className="badge">{fit.verdict}</span> <span className="badge">{fit.commercial_class_label}</span></h2>
+      <p><b>Why relevant:</b> {fit.why_relevant}</p>
+      <p><b>Problem:</b> {fit.problem}</p>
+      <p><b>Buying intent:</b> {fit.buying_intent}</p>
+      <p><b>Capabilities matched:</b> {fit.matched_capabilities.length === 0 ? "none" : fit.matched_capabilities.map((c) => `${c.label} (${c.evidence_status})`).join("; ")}</p>
+      <p><b>What I could deliver:</b></p><ol>{fit.what_i_could_deliver.map((s) => <li key={s}>{s}</li>)}</ol>
+      <p><b>Approach:</b> {fit.approach.angle}. {fit.approach.proposed_engagement}.</p>
+      <p><b>Next action:</b> {fit.approach.next_action}</p>
+      {fit.approach.cautions.map((c) => <div className="muted" key={c}>⚠ {c}</div>)}
+      <p className="muted">Reasons: {fit.verdict_reasons.join(" · ")} · confidence {fit.confidence} · stage {STAGE_LABEL[fit.pipeline_stage] ?? fit.pipeline_stage}</p>
+      {fit.missing.length > 0 && <p className="muted">Missing: {fit.missing.join("; ")}</p>}
+      <p><b>Contact routes (as published):</b> {fit.contact_routes.length === 0 ? "none" : fit.contact_routes.map((r) => `${r.kind}: ${r.value}${r.role ? ` (${r.role})` : ""}`).join(", ")}</p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button onClick={() => void act("Outreach draft", () => api.createDraft(id))}>Prepare outreach draft</button>
+        <button onClick={() => void act("Deal", () => api.createDeal(id))}>Create deal</button>
+        <button onClick={() => void act("Proposal draft", () => api.createProposal(id))}>Prepare proposal</button>
+      </div>
+      {note && <p className="muted">{note}</p>}
+    </section>
+  );
+}
+
+export function PipelineStages({ rows, proposals }: { rows: BoardRow[]; proposals: import("@/lib/api").ProposalRow[] }) {
+  const real = rows.filter((r) => !r.is_mock);
+  const order = ["discovered", "researched", "qualified", "outreach_prepared", "approved", "contacted", "responded", "meeting", "proposal", "negotiation", "won", "onboarding", "lost"];
+  return (
+    <section className="card">
+      <h2>Acquisition pipeline (real records)</h2>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {order.map((s) => (
+          <div className="card stat" key={s}><span className="muted">{STAGE_LABEL[s]}</span><b>{real.filter((r) => r.pipeline_stage === s).length}</b></div>
+        ))}
+      </div>
+      <h2>Proposals ({proposals.length})</h2>
+      <p className="muted">Approval is an admin action on the API; sending is done by you, outside this system.</p>
+      {proposals.length === 0 ? <p className="muted">None yet.</p> : (
+        <table><thead><tr><th>Proposal</th><th>Status</th><th>Price</th><th>Open items</th></tr></thead>
+          <tbody>{proposals.map((p) => (
+            <tr key={p.id}><td>{p.title}</td><td><span className="badge">{p.status}</span></td>
+              <td>{p.price_text ?? "not set"}</td><td>{p.has_placeholders ? "placeholders remain" : "ready for approval"}</td></tr>))}</tbody></table>
+      )}
+    </section>
   );
 }

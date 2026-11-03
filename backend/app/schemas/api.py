@@ -191,6 +191,7 @@ class BoardRow(BaseModel):
     ai_next_action: str | None
     small_team_fit: str | None
     external_delivery: str | None
+    pipeline_stage: str
     origin: str  # auto | manual (human-supplied intake)
     intake: dict[str, Any] | None
     commercial_class: str  # one of the six commercial-intent classes

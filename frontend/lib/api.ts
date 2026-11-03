@@ -68,7 +68,7 @@ export interface BoardRow {
   stage_b: Record<string, { result: string; detail: string }>;
   view: RecordView;
   evidence_excerpt: string | null;
-  channel: "agency" | "direct_buyer";
+  channel: "agency" | "direct_buyer" | "proactive_buyer";
   project_type: string;
   budget_value: number | null;
   budget_currency: string | null;
@@ -77,6 +77,7 @@ export interface BoardRow {
   ai_next_action: string | null;
   small_team_fit: string | null;
   external_delivery: string | null;
+  pipeline_stage: string;
   origin: "auto" | "manual";
   intake: {
     by: string; at: string; platform: string; channel: string; date_supplied: boolean;
@@ -149,7 +150,7 @@ export function applyFilters(rows: BoardRow[], f: Filters): BoardRow[] {
 
 export type RecordView =
   | "active_project" | "agency_seeking" | "needs_verification" | "verified_partnership"
-  | "potential_partner" | "rejected" | "unqualified_signal";
+  | "potential_partner" | "rejected" | "unqualified_signal" | "proactive_prospect";
 
 export interface CostSummary {
   lines: { family: string; spent_usd: number; cap_usd: number | null; remaining_usd: number | null }[];
@@ -288,6 +289,11 @@ export const api = {
   connectors: () => request<Connector[]>("/connectors"),
   board: () => request<BoardRow[]>("/board"),
   routes: () => request<RouteRow[]>("/routes"),
+  fit: (id: string) => request<Fit>(`/opportunities/${id}/fit`),
+  createDraft: (id: string) => request<{ draft_id: string }>(`/opportunities/${id}/draft`, { method: "POST" }),
+  createProposal: (id: string) => request<ProposalRow>(`/opportunities/${id}/proposal`, { method: "POST" }),
+  proposals: () => request<ProposalRow[]>("/proposals"),
+  pipeline: () => request<PipelineSummary>("/pipeline"),
   intake: (body: IntakeInput) =>
     request<BoardRow>("/intake", { method: "POST", body: JSON.stringify(body) }),
   sources: () => request<SourcePerformance>("/sources/performance"),
@@ -351,3 +357,26 @@ export function jobTotals(run: Run): JobTotals {
 export function viewRows(rows: BoardRow[], view: RecordView): BoardRow[] {
   return splitReal(rows).real.filter((r) => r.view === view && r.origin !== "manual");
 }
+
+export interface Fit {
+  organization: string | null; country: string | null; commercial_class_label: string;
+  channel: string; why_relevant: string; problem: string; buying_intent: string;
+  evidence: { url: string; published: string | null; quote: string; provider: string }[];
+  matched_capabilities: { label: string; matched_terms: string[]; evidence_status: string }[];
+  what_i_could_deliver: string[]; decision_roles: { route: string; role_as_printed: string | null }[];
+  contact_routes: { kind: string; value: string; role: string | null }[];
+  verdict: string; verdict_reasons: string[]; missing: string[]; confidence: string; pipeline_stage: string;
+  approach: { angle: string; proposed_engagement: string; next_action: string; cautions: string[] };
+}
+export interface ProposalRow {
+  id: string; opportunity_id: string; title: string; status: string; body: string;
+  price_text: string | null; prepared_by: string; approved_by: string | null; has_placeholders: boolean;
+}
+export interface PipelineSummary { stages: string[]; counts: Record<string, number>; active: { opportunity_id: string; title: string; stage: string; channel: string }[] }
+
+export const STAGE_LABEL: Record<string, string> = {
+  discovered: "Discovered", researched: "Researched", qualified: "Qualified",
+  outreach_prepared: "Outreach prepared", approved: "Approved", contacted: "Contacted",
+  responded: "Responded", meeting: "Meeting", proposal: "Proposal", negotiation: "Negotiation",
+  won: "Won", onboarding: "Onboarding", lost: "Lost", rejected: "Rejected",
+};

@@ -29,3 +29,6 @@ next-env.d.ts
 .vscode/
 pgdata/
 *.log
+
+# local database backups (contain contact data)
+backups/

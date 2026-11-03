@@ -22,6 +22,7 @@ from app.connectors.public_apis import (
     WorldBankApiConnector,
 )
 from app.connectors.sam_gov import SamGovConnector
+from app.connectors.triggers import HnHiringTriggerConnector, TedPlanningNoticeConnector
 from app.core.config import Settings, get_settings
 
 Factory = Callable[[Settings], DiscoveryConnector]
@@ -37,6 +38,8 @@ _FACTORIES: dict[str, Factory] = {
     "uk_contracts_finder": lambda s: ContractsFinderConnector(s),
     "hn_freelancer_threads": lambda s: HackerNewsFreelancerConnector(s),
     "canadabuys": lambda s: CanadaBuysConnector(s),
+    "hn_hiring_triggers": lambda s: HnHiringTriggerConnector(s),
+    "ted_planning_notices": lambda s: TedPlanningNoticeConnector(s),
     "uk_find_a_tender": lambda s: FindATenderConnector(s),
     "sam_gov": lambda s: SamGovConnector(s),
     "intent_search": lambda s: SearchIntentConnector(s),

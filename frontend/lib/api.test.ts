@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupByCategory, jobTotals, runProgress, splitReal, viewRows, applyFilters, NO_FILTERS, type BoardRow, type Opportunity, type Run } from "./api";
+import { groupByCategory, jobTotals, runProgress, splitReal, viewRows, STAGE_LABEL, applyFilters, NO_FILTERS, type BoardRow, type Opportunity, type Run } from "./api";
 
 const o = (id: string, category: Opportunity["category"]): Opportunity => ({
   id, category, title: id, status: "new", verification_status: "unverified",
@@ -79,5 +79,17 @@ describe("manual intake separation", () => {
   it("keeps human-supplied records out of the automatic lead lists", () => {
     const r = (id: string, origin: string) => ({ id, origin, view: "needs_verification", is_mock: false }) as BoardRow;
     expect(viewRows([r("a", "auto"), r("m", "manual")], "needs_verification").map((x) => x.id)).toEqual(["a"]);
+  });
+});
+
+describe("pipeline stages", () => {
+  it("labels every stage the owner defined", () => {
+    for (const s of ["discovered", "researched", "qualified", "outreach_prepared", "approved", "contacted", "responded", "meeting", "proposal", "negotiation", "won", "onboarding", "lost"]) {
+      expect(STAGE_LABEL[s]).toBeTruthy();
+    }
+  });
+  it("keeps proactive triggers out of the active-project list", () => {
+    const r = (id: string, view: string) => ({ id, view, origin: "auto", is_mock: false }) as BoardRow;
+    expect(viewRows([r("t", "proactive_prospect"), r("a", "active_project")], "active_project").map((x) => x.id)).toEqual(["a"]);
   });
 });

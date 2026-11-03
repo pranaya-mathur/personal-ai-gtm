@@ -65,6 +65,7 @@ class RawFinding(BaseModel):
     contact_route: str | None = None  # buyer email / application URL printed in the source
     # Agency findings: which of the three partnership classes the SOURCE supports.
     routes: list[RawRoute] = Field(default_factory=list)
+    channel_hint: str | None = None  # e.g. "proactive_buyer" (a trigger, never a request)
     evergreen: bool = False  # live page with no publication date: treated as current, stays undated
     partnership_class: Literal["active_requirement", "verified_model", "potential"] | None = None
 

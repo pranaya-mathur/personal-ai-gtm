@@ -61,9 +61,15 @@ from app.schemas.api import (
 )
 from app.services.commercial_class import LABELS as COMMERCIAL_LABELS
 from app.services.commercial_class import commercial_class
-from app.services.engagement import EngagementError, add_interaction, get_or_create_deal
+from app.services.engagement import (
+    EngagementError,
+    add_interaction,
+    get_or_create_deal,
+    mark_draft_sent,
+    update_deal,
+)
 from app.services.engagement import list_deals as engagement_list
-from app.services.engagement import mark_draft_sent, update_deal
+from app.services.fit import pipeline_stage
 from app.services.intake import IntakeError, intake_lead
 from app.services.project_type import project_type as project_type_of
 from app.services.query_strategy import effectiveness_report
@@ -442,6 +448,8 @@ def view_for(opp: Opportunity, org_kind: str | None) -> str:
         return "rejected"
     cat = opp.category
     agency = opp.channel == "agency" or org_kind == "agency"
+    if opp.channel == "proactive_buyer":
+        return "proactive_prospect"  # a business trigger, never counted as demand
     if cat == OpportunityCategory.VERIFIED_PARTNERSHIP:
         return "verified_partnership"
     if cat == OpportunityCategory.SPECULATIVE_PROSPECT:
@@ -606,6 +614,7 @@ def board(
             ai_next_action=dossier.get("suggested_next_action"),
             small_team_fit=dossier.get("small_team_fit"),
             external_delivery=dossier.get("external_delivery"),
+            pipeline_stage=pipeline_stage(db, opp),
             origin="manual" if evs and all(e.provider == "manual_intake" for e in evs) else "auto",
             intake=intake_meta,
             commercial_class=commercial_class(
@@ -850,9 +859,7 @@ def query_performance(db: Session = Depends(get_db)) -> dict[str, object]:
 
 
 @router.get("/deals", response_model=list[DealOut])
-def deals(
-    follow_ups: bool = False, db: Session = Depends(get_db)
-) -> list[dict[str, object]]:
+def deals(follow_ups: bool = False, db: Session = Depends(get_db)) -> list[dict[str, object]]:
     return engagement_list(db, follow_ups_only=follow_ups)
 
 

@@ -1,5 +1,6 @@
 from app.models.entities import (
     AiAnalysis,
+    CapabilityProfile,
     Contact,
     ContactRoute,
     Deal,
@@ -7,10 +8,12 @@ from app.models.entities import (
     Evidence,
     Interaction,
     LlmUsage,
+    OnboardingItem,
     Opportunity,
     OpportunityEvidence,
     Organization,
     OutreachDraft,
+    Proposal,
     ProviderSpend,
     Qualification,
     SearchProfile,
@@ -19,6 +22,9 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "CapabilityProfile",
+    "OnboardingItem",
+    "Proposal",
     "AiAnalysis",
     "Contact",
     "ContactRoute",

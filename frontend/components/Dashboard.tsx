@@ -3,19 +3,19 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   api, splitReal,
-  runProgress, type AiStatus, type AiUsage, type Connector, type Deal, type Draft, type Evidence, type Metrics,
+  runProgress, type AiStatus, type AiUsage, type Connector, type Deal, type ProposalRow, type Draft, type Evidence, type Metrics,
   type BoardRow, type CostSummary, type Filters, NO_FILTERS, applyFilters, type Profile, type Run, type RouteRow, type SourcePerformance,
 } from "@/lib/api";
-import { ContactsView, CostPanel, EngagementView, FilterBar, IntakeView, OperationsView, RecordsView, ResearchDetail, SourcesView, SpendView } from "./Views";
+import { ContactsView, CostPanel, EngagementView, FilterBar, IntakeView, OperationsView, PipelineStages, RecordsView, ResearchDetail, SourcesView, SpendView } from "./Views";
 
 type Tab =
   | "overview" | "projects" | "agencies" | "partners" | "verify" | "contacts"
-  | "sources" | "spend" | "rejected" | "operations" | "research" | "intake" | "pipeline";
+  | "sources" | "spend" | "rejected" | "operations" | "research" | "intake" | "pipeline" | "proactive";
 const TABS: [Tab, string][] = [
   ["overview", "Overview"], ["projects", "Active AI implementation opportunities"],
   ["agencies", "Agencies seeking delivery partners"], ["partners", "Verified & potential agency partners"],
   ["verify", "Relevant, needs verification"], ["contacts", "Contact routes & next actions"],
-  ["pipeline", "Engagement pipeline"],
+  ["proactive", "Proactive buyers (triggers)"], ["pipeline", "Engagement pipeline"],
   ["sources", "Discovery sources"], ["spend", "OpenAI & provider spend"],
   ["rejected", "Rejected / unqualified"], ["intake", "Manual intake"],
   ["operations", "Discovery operations"], ["research", "Research detail"],
@@ -43,15 +43,16 @@ export default function Dashboard() {
   const [routes, setRoutes] = useState<RouteRow[]>([]);
   const [sources, setSources] = useState<SourcePerformance | null>(null);
   const [deals, setDeals] = useState<Deal[]>([]);
+  const [proposals, setProposals] = useState<ProposalRow[]>([]);
 
   const load = useCallback(async () => {
     try {
-      const [m, o, r, d, e, c, p, ai, au, b, co, ro, so, dl] = await Promise.all([
+      const [m, o, r, d, e, c, p, ai, au, b, co, ro, so, dl, pr] = await Promise.all([
         api.metrics(), api.opportunities(), api.runs(), api.drafts(),
         api.evidence(), api.connectors(), api.profiles(), api.aiStatus(), api.aiUsage(),
-        api.board(), api.costs(), api.routes(), api.sources(), api.deals(),
+        api.board(), api.costs(), api.routes(), api.sources(), api.deals(), api.proposals(),
       ]);
-      setBoard(b); setCosts(co); setRoutes(ro); setSources(so); setDeals(dl); setLoaded(true);
+      setBoard(b); setCosts(co); setRoutes(ro); setSources(so); setDeals(dl); setProposals(pr); setLoaded(true);
       setMetrics(m); setOpps(o); setRuns(r); setDrafts(d);
       setEvidence(e); setConnectors(c); setProfiles(p); setAiStatus(ai); setAiUsage(au); setError(null);
     } catch (e) {
@@ -120,6 +121,7 @@ export default function Dashboard() {
         title="Rejected and unqualified records"
         blurb="Kept for audit with the reason (not relevant, closed, awarded, or a signal that states no need). Evidence is preserved." />}
       {tab === "intake" && <IntakeView rows={board} onOpen={open} onSaved={() => void load()} />}
+      {tab === "pipeline" && <PipelineStages rows={board} proposals={proposals} />}
       {tab === "pipeline" && <EngagementView deals={deals} board={board} onOpen={open} onRefresh={() => void load()} />}
       {tab === "contacts" && <ContactsView routes={routes} onOpen={open} />}
       {tab === "sources" && <SourcesView data={sources} />}
@@ -127,7 +129,10 @@ export default function Dashboard() {
       {tab === "operations" && (
         <OperationsView runs={runs} onCancel={async (id) => { await api.cancelRun(id); await load(); }} />
       )}
-      {tab === "research" && <ResearchDetail id={selected} row={board.find((r) => r.id === selected)} />}
+      {tab === "research" && <ResearchDetail id={selected} row={board.find((r) => r.id === selected)} onChanged={() => void load()} />}
+      {tab === "proactive" && <RecordsView rows={shown} view="proactive_prospect" onOpen={open}
+        title="Proactive buyers (business triggers)"
+        blurb="Organisations with an observable trigger (for example hiring AI engineers, or a planning notice). These are NOT requests and are never counted as active demand: research them, then decide whether to propose." />}
 
       {tab === "overview" && <>
       <section className="grid stats">

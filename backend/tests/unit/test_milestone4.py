@@ -809,9 +809,9 @@ def test_apify_intent_runs_two_engines_caps_each_run_and_reads_only_stated_reque
         "https://alpha.example/partners": SignalKind.PARTNER_ACTIVITY,
         "https://buyer.example/brief": SignalKind.PROJECT_REQUEST,
     }
-    assert res.actual_cost_usd == pytest.approx(
-        4 * 0.0123
-    )  # the provider-reported usage, not the estimate
+    # per run: the larger of provider usage ($0.0123) and the published price (google 2 pages
+    # $0.00905; bing 1 query x 10 results $0.0455)
+    assert res.actual_cost_usd == pytest.approx(2 * 0.0123 + 2 * 0.0455)
 
 
 def test_provider_rejection_releases_the_reservation_and_is_not_retried(session) -> None:  # type: ignore[no-untyped-def]

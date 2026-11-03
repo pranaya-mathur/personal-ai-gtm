@@ -118,7 +118,11 @@ class SamGovConnector:
                 status = "unknown"
             ui_link = (n.get("uiLink") or "").strip()
             url = ui_link or f"https://sam.gov/opp/{notice_id}/view"
-            org = (n.get("fullParentPathName") or n.get("organizationName") or "").split(".")[-1].strip()
+            org = (
+                (n.get("fullParentPathName") or n.get("organizationName") or "")
+                .split(".")[-1]
+                .strip()
+            )
             email = None
             point = n.get("pointOfContact") or []
             if isinstance(point, list) and point:

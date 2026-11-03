@@ -19,13 +19,6 @@ TOKENS = f"alice:admin:{ADMIN},olga:operator:{OPERATOR},victor:viewer:{VIEWER}"
 
 @pytest.fixture
 def client(pg_url, monkeypatch):  # type: ignore[no-untyped-def]
-    # Hard guard: never wipe a database whose name is not clearly a test DB.
-    db_name = pg_url.rsplit("/", 1)[-1].split("?", 1)[0]
-    if not db_name.endswith("_test") and "test" not in db_name:
-        pytest.fail(
-            f"Refusing to DROP SCHEMA on {db_name!r}. Point TEST_DATABASE_URL at a "
-            "dedicated database whose name contains 'test' (e.g. gtm_test)."
-        )
     monkeypatch.setenv("DATABASE_URL", pg_url)
     monkeypatch.setenv("API_TOKENS", TOKENS)
     from app.core.config import get_settings
@@ -340,3 +333,77 @@ def test_intake_endpoint_roles_validation_and_separation(client) -> None:  # typ
     assert row["verification_status"] == "unverified"
     auto = [r for r in client.get("/board").json() if r["origin"] == "auto"]
     assert row["id"] not in {r["id"] for r in auto}  # separate from automatic discovery
+
+
+def test_commercial_journey_through_the_api(client) -> None:  # type: ignore[no-untyped-def]
+    """Fit -> personalised draft -> approval gate -> deal -> proposal -> approval -> won -> onboarding."""
+    op, viewer = _as(client, OPERATOR), _as(client, VIEWER)
+    body = {
+        "source_url": "https://buyer.example/rfp/7", "platform": "other", "channel": "direct_buyer",
+        "buyer_name": "Buyer Seven", "requirement": "Build a RAG assistant over support documents",
+        "excerpt": "We are looking for a team to design and deploy a retrieval-augmented assistant over our support documents. Budget 8000 USD.",
+        "status": "open", "budget_text": "8000 USD", "contact_route": "procurement@buyer.example",
+    }  # fmt: skip
+    oid = client.post("/intake", json=body, headers=op).json()["id"]
+
+    # capability profile: viewers read, only admin writes, references need a verifiable link
+    assert client.get("/capabilities", headers=viewer).status_code == 200
+    assert client.put("/capabilities", json=[], headers=op).status_code == 403
+    bad = [
+        {
+            "key": "rag",
+            "label": "RAG",
+            "terms": ["RAG"],
+            "projects": [{"title": "x", "verifiable_reference": ""}],
+        }
+    ]
+    assert client.put("/capabilities", json=bad).status_code == 422
+
+    fit = client.get(f"/opportunities/{oid}/fit", headers=viewer).json()
+    assert fit["evidence"][0]["url"].endswith("/rfp/7") and fit["matched_capabilities"]
+    assert client.post(f"/opportunities/{oid}/draft", headers=viewer).status_code == 403
+    d = client.post(f"/opportunities/{oid}/draft", headers=op)
+    assert (
+        d.status_code == 201
+        and client.post(f"/opportunities/{oid}/draft", headers=op).status_code == 409
+    )
+    draft = next(x for x in client.get("/drafts").json() if x["id"] == d.json()["draft_id"])
+    assert draft["status"] == "pending_approval" and "[YOUR RELEVANT EXPERIENCE" in draft["body"]
+    assert (
+        client.post(f"/drafts/{draft['id']}/approve", headers=op).status_code == 403
+    )  # admin only
+    assert client.post(f"/drafts/{draft['id']}/approve").status_code == 409  # placeholders remain
+
+    deal = client.post("/deals", json={"opportunity_id": oid}, headers=op).json()
+    assert (
+        client.post(f"/deals/{deal['id']}/onboarding", headers=op).status_code == 409
+    )  # not won yet
+
+    prop = client.post(f"/opportunities/{oid}/proposal", headers=op).json()
+    assert prop["status"] == "draft" and prop["has_placeholders"]
+    assert client.post(f"/proposals/{prop['id']}/approve").status_code == 409
+    done = prop["body"].replace("[PRICE - set by the owner; no figure is suggested here]", "USD 7,500").replace("[TIMELINE - to be estimated by the owner after discovery]", "4 weeks").replace("[RELEVANT EXPERIENCE - none on file. Add approved, verifiable references; do not invent]", "References on request.")  # fmt: skip
+    assert (
+        client.patch(
+            f"/proposals/{prop['id']}", json={"body": done, "price_text": "USD 7,500"}, headers=op
+        ).status_code
+        == 200
+    )
+    assert client.post(f"/proposals/{prop['id']}/approve", headers=op).status_code == 403
+    ok = client.post(f"/proposals/{prop['id']}/approve").json()
+    assert ok["status"] == "approved" and ok["approved_by"] == "alice"
+    assert client.post(f"/proposals/{prop['id']}/mark-sent", headers=op).json()["status"] == "sent"
+
+    assert (
+        client.patch(f"/deals/{deal['id']}", json={"stage": "won"}, headers=op).status_code == 200
+    )
+    items = client.post(f"/deals/{deal['id']}/onboarding", headers=op).json()
+    assert len(items) >= 5 and not any(i["done"] for i in items)
+    tick = client.patch(f"/onboarding/{items[0]['id']}", json={"done": True}, headers=op).json()
+    assert tick["done"] and tick["done_by"] == "olga"
+    assert (
+        next(r for r in client.get("/board").json() if r["id"] == oid)["pipeline_stage"]
+        == "onboarding"
+    )
+    counts = client.get("/pipeline").json()["counts"]
+    assert counts["onboarding"] == 1

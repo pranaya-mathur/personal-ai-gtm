@@ -76,9 +76,12 @@ class ApifyActorConnector:
             mapped=len(findings),
             skipped=skipped,
         )
-        cost = run.get("usageTotalUsd")
+        reported = run.get("usageTotalUsd")
+        # Pay-per-result charges are not yet in usageTotalUsd when the run ends (the first TED run
+        # showed $0.00005 but billed $0.076). Never under-record: take the larger of the provider
+        # figure and the published price applied to the items actually returned.
+        expected = self.spec.estimate_usd(len(items))
+        actual = max(float(reported) if isinstance(reported, int | float) else 0.0, expected)
         return DiscoveryResult(
-            provider=self.name,
-            findings=findings,
-            actual_cost_usd=float(cost) if isinstance(cost, int | float) else max_charge,
+            provider=self.name, findings=findings, actual_cost_usd=min(actual, max_charge)
         )

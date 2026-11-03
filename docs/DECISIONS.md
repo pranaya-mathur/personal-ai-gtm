@@ -56,3 +56,8 @@
 52. **Manual intake cannot become actionable** until human verification. `assess_opportunity` and `intake_lead` cap `manual_intake` records at `needs_verification`; category may still be `confirmed_demand` from stated text, but triage never claims actionable demand from a pasted excerpt alone.
 53. **Actionable excludes non-discrete vehicles**: ITQ/source lists, DPS/frameworks, selective supply arrangements, defence/military R&D, and national-scale AI research / prior-information partnering notices stay `needs_verification` (evidence retained).
 54. **Integration tests refuse to wipe non-test databases**. `TEST_DATABASE_URL` must name a DB containing `test` (e.g. `gtm_test`); the shared `gtm` database is never `DROP SCHEMA`'d by pytest.
+
+45. **Pipeline C (proactive buyers) is a separate channel** (`channel=proactive_buyer`, always `speculative_prospect`). A trigger is never a request, never counted as demand, never actionable; the UI and fit analysis say so. Hiring posts qualify only with an outside-help or new-initiative signal.
+46. **Capability profile** lists the owner's stated areas with NO invented projects; a project reference needs a verifiable link. Fit/outreach/proposals quote evidence, list unknowns, and leave experience, price and timeline as placeholders; approval is refused while any remain.
+47. **Pipeline stage is derived from stored facts** (drafts, deals, interactions, onboarding items); it never advances silently. Proposals and onboarding items are human-approved/ticked.
+48. **Apify costs use max(provider usage, published price x items)**; the live DB is protected from test wipes by a shared guard; backups are verified by restoring into a throwaway database.

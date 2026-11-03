@@ -431,3 +431,56 @@ class ContactRoute(Base, IdMixin, TimestampMixin):
     role: Mapped[str | None] = mapped_column(String(256))  # only if the source states a role
     source_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     snippet: Mapped[str | None] = mapped_column(Text)  # source text the route came from
+
+
+class CapabilityProfile(Base, IdMixin, TimestampMixin):
+    """The owner's approved capabilities. One row. Areas are what the owner CLAIMS; a project
+    reference counts only when the owner adds it as verified. Nothing is inferred or invented."""
+
+    __tablename__ = "capability_profile"
+
+    areas: Mapped[list] = mapped_column(JsonType, default=list, nullable=False)  # type: ignore[type-arg]
+    updated_by: Mapped[str | None] = mapped_column(String(128))
+
+
+class Proposal(Base, IdMixin, TimestampMixin):
+    """A proposal draft. Human-approved before it is marked sent; commitments stay human."""
+
+    __tablename__ = "proposals"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('draft', 'approved', 'sent', 'accepted', 'declined')",
+            name="ck_proposals_status",
+        ),
+        CheckConstraint(
+            "status NOT IN ('approved', 'sent', 'accepted') "
+            "OR (approved_by IS NOT NULL AND approved_at IS NOT NULL)",
+            name="ck_proposals_requires_approval",
+        ),
+    )
+
+    opportunity_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("opportunities.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    scope: Mapped[dict] = mapped_column(JsonType, default=dict, nullable=False)  # type: ignore[type-arg]
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    price_text: Mapped[str | None] = mapped_column(String(256))  # None = not set by the owner
+    status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)
+    prepared_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(String(128))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OnboardingItem(Base, IdMixin, TimestampMixin):
+    __tablename__ = "onboarding_items"
+    __table_args__ = (UniqueConstraint("deal_id", "label", name="uq_onboarding_label"),)
+
+    deal_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("deals.id", ondelete="CASCADE"), nullable=False
+    )
+    label: Mapped[str] = mapped_column(String(300), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    done: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    done_by: Mapped[str | None] = mapped_column(String(128))
+    done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

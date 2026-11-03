@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -47,9 +47,7 @@ INDUSTRY_FACETS = (
 _SPACE = re.compile(r"\s+")
 
 # Outcomes that count as commercially useful for query ranking (not mere keyword hits).
-_USEFUL = frozenset(
-    {CONFIRMED_ACTIVE_REQUEST, ACTIVE_AGENCY_PARTNER_NEED, NEEDS_VERIFICATION}
-)
+_USEFUL = frozenset({CONFIRMED_ACTIVE_REQUEST, ACTIVE_AGENCY_PARTNER_NEED, NEEDS_VERIFICATION})
 
 
 @dataclass(frozen=True)
@@ -117,10 +115,7 @@ def prefer_effective(
     session: Session, plan: list[PlannedQuery], *, min_searches: int = 2
 ) -> list[PlannedQuery]:
     """Deprioritize queries that repeatedly yield zero useful commercial classes."""
-    rows = {
-        r.fingerprint: r
-        for r in session.execute(select(DiscoveryQueryStat)).scalars()
-    }
+    rows = {r.fingerprint: r for r in session.execute(select(DiscoveryQueryStat)).scalars()}
     good: list[PlannedQuery] = []
     cold: list[PlannedQuery] = []
     weak: list[PlannedQuery] = []
@@ -203,7 +198,9 @@ def record_outcome(
 
 def effectiveness_report(session: Session) -> list[dict[str, object]]:
     out: list[dict[str, object]] = []
-    for r in session.execute(select(DiscoveryQueryStat).order_by(DiscoveryQueryStat.searches.desc())).scalars():
+    for r in session.execute(
+        select(DiscoveryQueryStat).order_by(DiscoveryQueryStat.searches.desc())
+    ).scalars():
         useful = r.confirmed_active + r.agency_partner_need + r.needs_verification
         out.append(
             {

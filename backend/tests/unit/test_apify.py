@@ -81,7 +81,8 @@ def test_ted_maps_only_valid_open_notices(approved: Settings) -> None:
     assert f.source_url.startswith("https://ted.example/notice/100001-2026")
     assert "retrieval-based assistant" in f.original_text  # verbatim description kept
     assert f.published_at is not None and f.contacts == []
-    assert result.actual_cost_usd == 0.01
+    # the larger of provider usage ($0.01) and published price x returned items (3 x $0.004 + start)
+    assert result.actual_cost_usd == pytest.approx(0.01205)
 
     post = next(r for r in fake.requests if r.method == "POST")
     assert post.url.path == "/v2/acts/foxlabs~ted-tenders/runs"
@@ -196,7 +197,7 @@ def test_workflow_with_apify_persists_dedupes_and_tracks_spend(session, approved
         "procurement@agri.example"
     ]
     spend = session.execute(select(func.sum(ProviderSpend.amount_usd))).scalar_one()
-    assert float(spend) == pytest.approx(0.05)
+    assert float(spend) >= 0.05  # never below provider-reported usage; priced items may raise it
 
     n_opp = len(opps)
     _run(session, approved, [ted, wb])  # same results again
@@ -277,3 +278,13 @@ def test_ted_only_open_calls_are_mapped() -> None:
     award = spec.map_item({**base, "noticeType": "can-standard"}, DiscoveryQuery())
     assert award is not None and award.source_status == "awarded"
     assert spec.map_item({**base, "noticeType": "corr"}, DiscoveryQuery()) is None
+
+
+def test_cost_is_never_under_recorded_when_usage_is_not_yet_finalised(approved: Settings) -> None:
+    """Real incident: usageTotalUsd read $0.00005 at run end for a run that billed $0.076."""
+    items = load("ted_tenders_items.json")
+    conn, _ = make("apify_ted_tenders", items, approved, usage=0.00005)
+    result = conn.discover(DiscoveryQuery(max_results=50))
+    spec = SPECS["apify_ted_tenders"]
+    assert result.actual_cost_usd >= spec.estimate_usd(len(items)) - 1e-9  # price x items returned
+    assert result.actual_cost_usd <= conn.estimate_cost(DiscoveryQuery(max_results=50)).usd + 1e-9

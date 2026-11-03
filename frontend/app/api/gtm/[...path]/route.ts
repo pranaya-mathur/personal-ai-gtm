@@ -13,8 +13,11 @@ const ALLOWED_POST = [
   /^deals$/,
   /^deals\/[0-9a-f-]+\/interactions$/,
   /^drafts\/[0-9a-f-]+\/mark-sent$/,
+  /^opportunities\/[0-9a-f-]+\/(draft|proposal)$/,
+  /^deals\/[0-9a-f-]+\/onboarding$/,
+  /^proposals\/[0-9a-f-]+\/mark-sent$/,
 ];
-const ALLOWED_PATCH = [/^deals\/[0-9a-f-]+$/];
+const ALLOWED_PATCH = [/^deals\/[0-9a-f-]+$/, /^onboarding\/[0-9a-f-]+$/, /^proposals\/[0-9a-f-]+$/];
 
 async function forward(req: NextRequest, path: string[]): Promise<NextResponse> {
   const token = process.env.GTM_API_TOKEN;

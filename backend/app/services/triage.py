@@ -556,13 +556,18 @@ def assess_opportunity(
             *a.reasons,
             "manual intake: human verification of the original source is required",
         ]
-        a.next_action = (
-            "Verify the original post yourself, then mark the opportunity verified"
-        )
+        a.next_action = "Verify the original post yourself, then mark the opportunity verified"
         a.missing = [
             *a.missing,
             "verification: operator-supplied excerpt is not independent confirmation",
         ]
+    if opp.channel == "proactive_buyer":
+        a.reasons = [*a.reasons, "business trigger only: the source does not request any work"]
+        a.next_action = (
+            "Prospective buyer: research the trigger on the organisation's own site, find a "
+            "technical decision-maker, and only then decide whether to propose an engagement"
+        )
+        a.missing = [*a.missing, "buying intent: none evidenced"]
     return a
 
 

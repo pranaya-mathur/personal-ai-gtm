@@ -9,3 +9,9 @@ worker: ; cd backend && uv run python -m app.worker.main
 web: ; cd frontend && npm run dev
 test: ; cd backend && uv run pytest && cd ../frontend && npm test
 lint: ; cd backend && uv run ruff check . && uv run mypy app && cd ../frontend && npm run lint
+
+backup:
+	./scripts/db_backup.sh
+
+restore-check:
+	./scripts/db_restore_check.sh

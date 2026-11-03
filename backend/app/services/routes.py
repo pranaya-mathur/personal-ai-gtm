@@ -14,7 +14,7 @@ _LINK = re.compile(r"""(?is)<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>""")
 _PROCUREMENT = re.compile(r"(tender|procure|bid|submit|e-?sourcing|supplier|apply)", re.I)
 _JUNK_LOCAL = re.compile(r"^(noreply|no-reply|donotreply|do-not-reply)@", re.I)
 _ROLE = re.compile(
-    r"(head of [A-Za-z ]{3,30}|(?:chief|director|vp|manager|lead|partner(?:ship)?s?(?: manager)?"
+    r"(head of [A-Za-z ]{2,30}|(?:chief|director|vp|manager|lead|partner(?:ship)?s?(?: manager)?"
     r"|procurement officer|contracting officer)[A-Za-z ]{0,25})",
     re.I,
 )

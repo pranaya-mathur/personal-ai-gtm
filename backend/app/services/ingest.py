@@ -193,9 +193,13 @@ def ingest_finding(
             organization_id=org.id if org else None,
             confidence=finding.provider_confidence,
             dedupe_key=key,
-            channel="agency"
-            if finding.kind is SignalKind.PARTNER_ACTIVITY or org_kind == OrganizationKind.AGENCY
-            else "direct_buyer",
+            channel=finding.channel_hint
+            or (
+                "agency"
+                if finding.kind is SignalKind.PARTNER_ACTIVITY
+                or org_kind == OrganizationKind.AGENCY
+                else "direct_buyer"
+            ),
             source_status=finding.source_status,
             deadline=finding.deadline,
             budget_text=finding.budget_text,
