@@ -30,7 +30,7 @@ _PARTNER_NOUN = re.compile(
     re.I,
 )
 _MODEL = re.compile(
-    r"\b(white[- ]?label (?:partners?|teams?)|sub-?contract(?:s|ed|ing|ors?)\b|we (?:work|partner|collaborate) with "
+    r"\b(white[- ]?label (?:partners?|teams?)|sub-?contracted (?:team|developers|engineers|partners)|we (?:use|hire|engage|rely on) (?:\w+ ){0,2}sub-?contractors|we (?:work|partner|collaborate) with "
     r"(?:specialist |trusted |independent )?(?:sub-?contractors|freelance \w+|partner agencies|"
     r"delivery partners|specialist partners)|our network of (?:specialist |trusted )?"
     r"(?:partners|developers|engineers|sub-?contractors)|trusted (?:delivery )?partners? deliver|"

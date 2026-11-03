@@ -81,7 +81,8 @@ class TedApiConnector(_Free):
     kinds = frozenset({SignalKind.PROJECT_REQUEST})
     endpoint = "https://api.ted.europa.eu/v3/notices/search"
     fields = [
-        "notice-title", "description-proc", "deadline-receipt-tender-date-lot", "buyer-name",
+        "notice-title", "description-proc", "deadline-receipt-tender-date-lot",
+        "deadline-receipt-request-date-lot", "buyer-name",
         "buyer-country", "buyer-email", "estimated-value-lot", "estimated-value-cur-lot",
         "notice-type", "publication-date",
     ]  # fmt: skip
@@ -122,9 +123,11 @@ class TedApiConnector(_Free):
             if not number or not title:
                 continue
             desc = _pick(n.get("description-proc"))
-            deadlines = [
-                d for d in (_day(x) for x in (n.get("deadline-receipt-tender-date-lot") or [])) if d
-            ]
+            # Many notices carry the date under the "request" field (restricted/DPS procedures)
+            raw_dates = (n.get("deadline-receipt-tender-date-lot") or []) + (
+                n.get("deadline-receipt-request-date-lot") or []
+            )
+            deadlines = [d for d in (_day(x) for x in raw_dates) if d]
             deadline = max(deadlines) if deadlines else None
             status = "unknown" if deadline is None else ("open" if deadline >= now else "closed")
             vals, cur = (

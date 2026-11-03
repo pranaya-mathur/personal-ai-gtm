@@ -452,7 +452,7 @@ def test_checker_follows_the_sites_own_partner_links_and_classifies_silent_vs_do
         ),
         "https://linked.example/en/our-partner-network": (
             200,
-            "<p>We deliver client work together with trusted subcontractors across Europe.</p>",
+            "<p>We use trusted subcontractors for client work across Europe.</p>",
         ),
         "https://quiet.example/": (200, "<p>Welcome to our agency.</p>"),
     }
@@ -901,3 +901,65 @@ def test_a_connector_serving_both_agents_is_called_and_billed_once_per_run(sessi
     assert run.status == "succeeded" and Both.calls == 1
     spent = [float(r.amount_usd) for r in session.execute(select(ProviderSpend)).scalars()]
     assert spent == [0.02]
+
+
+# ------------------------------------------------------------------ defects found in the validation run
+def test_ted_deadline_is_read_from_the_request_field_when_the_tender_field_is_absent() -> None:
+    soon = (NOW + timedelta(days=15)).strftime("%Y-%m-%d+01:00")
+    payload = {"notices": [{
+        "publication-number": "1-2026", "notice-title": {"eng": "Chatbot platform"},
+        "description-proc": {"eng": "Develop a chatbot."}, "publication-date": "2026-10-26+01:00",
+        "deadline-receipt-request-date-lot": [soon], "buyer-name": {"eng": ["City"]},
+        "buyer-email": ["p@city.example"], "buyer-country": ["FRA"],
+    }]}  # fmt: skip
+    f = TedApiConnector.parse(payload)[0]
+    assert f.source_status == "open" and f.deadline is not None
+    assert "deadline-receipt-request-date-lot" in TedApiConnector.fields
+
+
+def test_a_vendor_offering_white_label_capacity_is_not_a_sourcing_model() -> None:
+    from app.services.partnership import classify_partner_text
+
+    TERMS = S.topic_term_list
+    page = (
+        "AI and engineering support for software houses and agencies. When a client brief needs RAG, "
+        "seKer AI can take the technical slice while you keep the relationship. Named subcontractor. "
+        "We work best with partners who own the client conversation."
+    )
+    assert (
+        classify_partner_text(page, TERMS) is None
+    )  # it offers capacity; it does not seek or use any
+
+
+def test_first_person_use_of_subcontractors_is_still_a_verified_model() -> None:
+    from app.services.partnership import classify_partner_text
+
+    TERMS = S.topic_term_list
+    s = classify_partner_text(
+        "We use specialist subcontractors for machine learning work on client projects.", TERMS
+    )
+    assert s is not None and s.partnership_class == "verified_model"
+
+
+def test_a_manual_rejection_survives_every_later_reassessment(session) -> None:  # type: ignore[no-untyped-def]
+    from app.cli.audit import audit
+    from app.services.triage import apply_assessment
+
+    f = RawFinding(
+        kind=SignalKind.PROJECT_REQUEST, title="Generative AI assistant", source_url="https://b.example/1",
+        original_text="Seeking a supplier to design and deploy a generative AI assistant.", published_at=NOW,
+        organization_name="Real Buyer", source_status="open", deadline=NOW + timedelta(days=5),
+        contact_route="p@buyer.example",
+    )  # fmt: skip
+    oid = ingest_finding(session, f, "ted_api", None, 90).opportunity_id
+    o = session.get(Opportunity, oid)
+    assert o is not None
+    o.triage, o.rejection_reason, o.status = "rejected", "marketing_content", "disqualified"
+    o.assessment = {"manual_reject": True}
+    audit(session, S, apply=True)
+    apply_assessment(o, assess_opportunity(session, o, S))
+    assert (
+        o.triage == "rejected"
+        and o.status == "disqualified"
+        and o.rejection_reason == "marketing_content"
+    )

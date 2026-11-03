@@ -460,6 +460,8 @@ def apply_assessment(opp: Opportunity, a: Assessment) -> dict[str, Any]:
         "technical_relevance": opp.technical_relevance,
         "category": opp.category,
     }
+    if (opp.assessment or {}).get("manual_reject"):
+        return previous  # a human rejection is final: re-assessment must never revive the record
     opp.technical_relevance = a.technical_relevance
     opp.triage = a.triage
     opp.rejection_reason = a.rejection_reason
