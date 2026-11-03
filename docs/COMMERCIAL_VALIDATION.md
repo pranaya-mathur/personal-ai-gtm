@@ -46,7 +46,7 @@ Pursuable opportunities: **0**. Active agency delivery requirements: **0**. Real
 |---|---|---|---|---|---|
 | 1 | Action Logement (FR) – customer chatbot, deadline 2026-11-19 | https://ted.europa.eu/en/notice/723838-2026/html | achats.als@actionlogement.fr (procurement) | relevant scope; est. €316k, formal tender, delivery model unstated | read notice; only if you can bid at that scale |
 | 2 | Tourismus Felsenland Südeifel (DE) – AI guest advice, lot 3, deadline 2026-11-13 | https://ted.europa.eu/en/notice/712759-2026/html | info@felsenland-suedeifel.de (generic) | relevant; value unstated; German-language; short deadline | read lot 3; likely too soon |
-| 3 | Gemeente Den Haag – DAS innovation advisory, 2026-11-19 | https://ted.europa.eu/en/notice/697168-2026/html | [named individual - omitted] (named, role unverified) | advisory, €6m | skip unless consulting scale |
+| 3 | Gemeente Den Haag – DAS innovation advisory, 2026-11-19 | https://ted.europa.eu/en/notice/697168-2026/html | a named individual's address printed on the notice (role unverified; omitted here) | advisory, €6m | skip unless consulting scale |
 | – | EuroHPC (€4bn), Cyberagentur, Digifinland (DPS), ICT Skillnet (framework), C4ISR (defence) | in DB | procurement inboxes | not accessible / not small | reject for this engagement size |
 
 ### Proactive prospects (NOT demand; evidence = HN hiring post or TED planning notice)

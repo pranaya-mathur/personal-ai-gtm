@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pickToken, sameOrigin } from "@/lib/proxyPolicy";
+import { dashboardRole } from "@/lib/dashAuth";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,13 @@ async function forward(req: NextRequest, path: string[]): Promise<NextResponse> 
   if (["POST", "PATCH"].includes(req.method) && !sameOrigin(req)) {
     return NextResponse.json({ detail: "cross-origin request refused" }, { status: 403 });
   }
-  const picked = pickToken(req.method, target, process.env);
+  // role comes from this request's own Basic credentials, re-verified here (never from a header
+  // that middleware or a client could set); DASHBOARD_AUTH_DISABLED (dev) grants operator at most
+  const role = process.env.DASHBOARD_AUTH_DISABLED === "true" && !req.headers.get("authorization")
+    ? "operator" : dashboardRole(req.headers.get("authorization"), process.env);
+  if (target === "whoami") return NextResponse.json({ role });
+  if (!role) return NextResponse.json({ detail: "authentication required" }, { status: 401 });
+  const picked = pickToken(req.method, target, process.env, role);
   if (picked.forbidden) return NextResponse.json({ detail: picked.forbidden }, { status: 403 });
   const token = picked.token;
   if (!token) return NextResponse.json({ detail: "GTM_API_TOKEN is not configured" }, { status: 503 });

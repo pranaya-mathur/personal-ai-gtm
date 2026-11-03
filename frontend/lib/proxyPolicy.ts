@@ -28,11 +28,13 @@ export function sameOrigin(req: { headers: { get(n: string): string | null } }):
   try { return new URL(origin).host === host; } catch { return false; }
 }
 
-export function pickToken(method: string, target: string, env: Record<string, string | undefined>):
+export function pickToken(method: string, target: string, env: Record<string, string | undefined>, role: "admin" | "operator" | null = null):
   { token?: string; forbidden?: string } {
   const admin = (method === "POST" && ADMIN_POST.some((r) => r.test(target))) ||
     (method === "PATCH" && ADMIN_PATCH.some((r) => r.test(target)));
   if (admin) {
+    // user-level check FIRST: the admin API token is only reachable by a signed-in admin user
+    if (role !== "admin") return { forbidden: "admin sign-in required: your dashboard login is operator-level" };
     return env.GTM_ADMIN_API_TOKEN
       ? { token: env.GTM_ADMIN_API_TOKEN }
       : { forbidden: "admin approval is not configured for the dashboard (GTM_ADMIN_API_TOKEN)" };

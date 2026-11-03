@@ -350,6 +350,7 @@ export const api = {
     }),
   markDraftSent: (id: string) =>
     request<Draft>(`/drafts/${id}/mark-sent`, { method: "POST" }),
+  whoami: () => request<{ role: "admin" | "operator" | null }>("/whoami"),
   verify: (id: string, attest: string[], note?: string) =>
     request<Opportunity>(`/opportunities/${id}/verify`, { method: "POST", body: JSON.stringify({ attest, note }) }),
   allDrafts: () => request<Draft[]>("/drafts"),

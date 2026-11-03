@@ -49,6 +49,7 @@ export default function Dashboard() {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [proposals, setProposals] = useState<ProposalRow[]>([]);
   const [allDrafts, setAllDrafts] = useState<Draft[]>([]);
+  const [role, setRole] = useState<"admin" | "operator" | null>(null);
   const [queue, setQueue] = useState<ReviewItem[]>([]);
   const [schedules, setSchedules] = useState<SchedulesResponse | null>(null);
 
@@ -61,6 +62,7 @@ export default function Dashboard() {
         api.allDrafts(), api.reviewQueue(), api.schedules(),
       ]);
       setAllDrafts(ad); setQueue(rq); setSchedules(sc);
+      void api.whoami().then((w) => setRole(w.role)).catch(() => setRole(null));
       setBoard(b); setCosts(co); setRoutes(ro); setSources(so); setDeals(dl); setProposals(pr); setLoaded(true);
       setMetrics(m); setOpps(o); setRuns(r); setDrafts(d);
       setEvidence(e); setConnectors(c); setProfiles(p); setAiStatus(ai); setAiUsage(au); setError(null);
@@ -91,7 +93,7 @@ export default function Dashboard() {
       <header>
         <div>
           <h1>Personal AI GTM Command Center</h1>
-          <span className="muted">Paid providers stay off unless you approve them; nothing is ever sent automatically</span>
+          <span className="muted">Signed in as {role ?? "…"} · Paid providers stay off unless you approve them; nothing is ever sent automatically</span>
         </div>
         <button
           disabled={starting}
@@ -140,10 +142,10 @@ export default function Dashboard() {
       )}
       {tab === "research" && <ResearchDetail id={selected} row={board.find((r) => r.id === selected)} onChanged={() => void load()} />}
       {tab === "review" && <ReviewQueueView queue={queue} onOpen={open} onChanged={() => void load()} />}
-      {tab === "outreach" && <DraftsView drafts={allDrafts} onChanged={() => void load()} />}
-      {tab === "proposals" && <ProposalsView proposals={proposals} onChanged={() => void load()} />}
+      {tab === "outreach" && <DraftsView drafts={allDrafts} onChanged={() => void load()} isAdmin={role === "admin"} />}
+      {tab === "proposals" && <ProposalsView proposals={proposals} onChanged={() => void load()} isAdmin={role === "admin"} />}
       {tab === "onboarding" && <OnboardingView deals={deals} />}
-      {tab === "automation" && <AutomationView data={schedules} runs={runs} onChanged={() => void load()} />}
+      {tab === "automation" && <AutomationView data={schedules} runs={runs} onChanged={() => void load()} isAdmin={role === "admin"} />}
       {tab === "proactive" && <RecordsView rows={shown} view="proactive_prospect" onOpen={open}
         title="Proactive buyers (business triggers)"
         blurb="Organisations with an observable trigger (for example hiring AI engineers, or a planning notice). These are NOT requests and are never counted as active demand: research them, then decide whether to propose." />}

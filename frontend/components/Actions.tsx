@@ -49,7 +49,7 @@ export function ReviewQueueView({
 }
 
 /** Outreach drafts: edit, approve (admin token, server side), reject, record a manual send. */
-export function DraftsView({ drafts, onChanged }: { drafts: Draft[]; onChanged: () => void }) {
+export function DraftsView({ drafts, onChanged, isAdmin }: { drafts: Draft[]; onChanged: () => void; isAdmin: boolean }) {
   const [edit, setEdit] = useState<Record<string, { subject: string; body: string }>>({});
   const [msg, setMsg] = useState("");
   return (
@@ -72,7 +72,7 @@ export function DraftsView({ drafts, onChanged }: { drafts: Draft[]; onChanged: 
             {e.body.includes("[") && <div className="err">Contains [PLACEHOLDER] text: fill it in before approval.</div>}
             {editable && <>
               <button onClick={() => void guard(setMsg, async () => { await api.editDraft(d.id, { subject: e.subject, body: e.body }); onChanged(); }, "Draft saved")}>Save edits</button>{" "}
-              <button onClick={() => void guard(setMsg, async () => { await api.editDraft(d.id, { subject: e.subject, body: e.body }); await api.approveDraft(d.id); onChanged(); }, "Approved")}>Save &amp; approve (admin)</button>{" "}
+              <button disabled={!isAdmin} title={isAdmin ? "" : "Sign in with the admin dashboard login to approve"} onClick={() => void guard(setMsg, async () => { await api.editDraft(d.id, { subject: e.subject, body: e.body }); await api.approveDraft(d.id); onChanged(); }, "Approved")}>Save &amp; approve (admin)</button>{" "}
               <button onClick={() => void guard(setMsg, async () => { await api.rejectDraft(d.id); onChanged(); }, "Rejected")}>Reject</button>
             </>}
             {d.status === "approved" && (
@@ -89,7 +89,7 @@ export function DraftsView({ drafts, onChanged }: { drafts: Draft[]; onChanged: 
 }
 
 /** Proposals: review the full text, set scope/price/timeline in the body, approve, mark sent. */
-export function ProposalsView({ proposals, onChanged }: { proposals: ProposalRow[]; onChanged: () => void }) {
+export function ProposalsView({ proposals, onChanged, isAdmin }: { proposals: ProposalRow[]; onChanged: () => void; isAdmin: boolean }) {
   const [edit, setEdit] = useState<Record<string, { body: string; price: string }>>({});
   const [msg, setMsg] = useState("");
   return (
@@ -115,7 +115,7 @@ export function ProposalsView({ proposals, onChanged }: { proposals: ProposalRow
             {p.has_placeholders && <div className="err">Still has [placeholders] or no price: complete before approval.</div>}
             {editable && <>
               <button onClick={() => void guard(setMsg, async () => { await api.editProposal(p.id, { body: e.body, price_text: e.price }); onChanged(); }, "Proposal saved")}>Save</button>{" "}
-              <button onClick={() => void guard(setMsg, async () => { await api.editProposal(p.id, { body: e.body, price_text: e.price }); await api.approveProposal(p.id); onChanged(); }, "Approved")}>Save &amp; approve (admin)</button>
+              <button disabled={!isAdmin} title={isAdmin ? "" : "Sign in with the admin dashboard login to approve"} onClick={() => void guard(setMsg, async () => { await api.editProposal(p.id, { body: e.body, price_text: e.price }); await api.approveProposal(p.id); onChanged(); }, "Approved")}>Save &amp; approve (admin)</button>
             </>}
             {p.status === "approved" && (
               <button onClick={() => void guard(setMsg, async () => { await api.proposalSent(p.id); onChanged(); }, "Recorded as sent by you")}>
@@ -170,7 +170,8 @@ export function OnboardingView({ deals }: { deals: Deal[] }) {
 /** Scheduled discovery: per-source cadence, freshness and failures. Paid sources stay locked. */
 export function AutomationView({
   data, runs, onChanged,
-}: { data: SchedulesResponse | null; runs: Run[]; onChanged: () => void }) {
+  isAdmin,
+}: { data: SchedulesResponse | null; runs: Run[]; onChanged: () => void; isAdmin: boolean }) {
   const [msg, setMsg] = useState("");
   if (!data) return <p className="muted">Loading schedules…</p>;
   return (
@@ -194,7 +195,7 @@ export function AutomationView({
               <td>{s.last_retrieved} / {s.last_new}</td>
               <td>{s.consecutive_failures}{s.last_error ? <div className="err">{s.last_error}</div> : null}</td>
               <td>
-                <button disabled={s.paid && !data.paid_scheduling_allowed}
+                <button disabled={!isAdmin || (s.paid && !data.paid_scheduling_allowed)}
                   onClick={() => void guard(setMsg, async () => { await api.patchSchedule(s.connector, { enabled: !s.enabled }); onChanged(); }, "Schedule updated")}>
                   {s.enabled ? "Disable" : "Enable"} (admin)
                 </button>

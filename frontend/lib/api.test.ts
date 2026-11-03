@@ -123,15 +123,15 @@ describe("proxy policy", () => {
   const env = { GTM_API_TOKEN: "op", GTM_ADMIN_API_TOKEN: "adm" };
   const id = "11111111-1111-1111-1111-111111111111";
   it("uses the admin token only for approvals and never for operator actions", () => {
-    expect(pickToken("POST", `proposals/${id}/approve`, env).token).toBe("adm");
-    expect(pickToken("POST", `drafts/${id}/approve`, env).token).toBe("adm");
+    expect(pickToken("POST", `proposals/${id}/approve`, env, "admin").token).toBe("adm");
+    expect(pickToken("POST", `drafts/${id}/approve`, env, "admin").token).toBe("adm");
     expect(pickToken("POST", `opportunities/${id}/verify`, env).token).toBe("op");
     expect(pickToken("PATCH", `proposals/${id}`, env).token).toBe("op");
   });
   it("refuses approvals when no admin token is configured, and unknown actions", () => {
-    expect(pickToken("POST", `drafts/${id}/approve`, { GTM_API_TOKEN: "op" }).forbidden).toContain("not configured");
+    expect(pickToken("POST", `drafts/${id}/approve`, { GTM_API_TOKEN: "op" }, "admin").forbidden).toContain("not configured");
     expect(pickToken("POST", "capabilities", env).forbidden).toBeTruthy();
-    expect(pickToken("PATCH", "schedules/ted_api", env).token).toBe("adm");
+    expect(pickToken("PATCH", "schedules/ted_api", env, "admin").token).toBe("adm");
   });
   it("rejects cross-origin mutating requests", () => {
     const h = (m: Record<string, string>) => ({ headers: { get: (n: string) => m[n] ?? null } });
