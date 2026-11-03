@@ -717,3 +717,98 @@ def test_equipment_supply_titles_are_not_software_projects_even_without_a_catego
         "The microscope uses machine learning for image analysis. Supplier must install and commission it.",
     )
     assert r.technical_relevance == "not_relevant" and r.triage == "rejected"
+
+
+# ------------------------------------------------------------------ Apify SERP intent (mock transport only)
+class _FakeSerp:
+    def __init__(self, by_actor):  # type: ignore[no-untyped-def]
+        self.by_actor, self.runs, self.inputs = by_actor, [], []
+
+    def __call__(self, req: httpx.Request) -> httpx.Response:
+        p = req.url.path
+        if req.method == "POST" and p.endswith("/runs"):
+            actor = p.split("/acts/")[1].split("/runs")[0]
+            self.runs.append((actor, req.url.params["maxTotalChargeUsd"]))
+            self.inputs.append(json.loads(req.content))
+            return httpx.Response(201, json={"data": {"id": actor, "status": "RUNNING"}})
+        if p.startswith("/v2/actor-runs/"):
+            rid = p.rsplit("/", 1)[-1]
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "id": rid,
+                        "status": "SUCCEEDED",
+                        "defaultDatasetId": rid,
+                        "usageTotalUsd": 0.0123,
+                    }
+                },
+            )
+        if p.startswith("/v2/datasets/"):
+            return httpx.Response(200, json=self.by_actor[p.rsplit("/", 2)[-2]])
+        return httpx.Response(404)
+
+
+def _serp(urls):  # type: ignore[no-untyped-def]
+    return [{"organicResults": [{"url": u, "title": "t"} for u in urls]}]
+
+
+def _apify_intent(**kw):  # type: ignore[no-untyped-def]
+    from pydantic import SecretStr
+
+    from app.connectors.apify_client import ApifyClient
+    from app.connectors.intent_sources import ApifySearchIntentConnector
+
+    pages = kw.pop("pages")
+    fake = _FakeSerp(kw.pop("serp"))
+    s = Settings(
+        database_url="sqlite://", apify_paid_execution_approved=kw.pop("approved", True),
+        intent_queries_agency="a1|a2", intent_queries_buyer="b1|b2", apify_search_bing_queries=1,
+    )  # fmt: skip
+    client = ApifyClient(SecretStr("t"), transport=httpx.MockTransport(fake), poll_seconds=0)
+    return ApifySearchIntentConnector(s, client, _checker_pages(pages)), fake
+
+
+def test_apify_intent_estimate_matches_published_pricing_and_stays_under_the_cap() -> None:
+    c, _ = _apify_intent(pages={}, serp={})
+    est = c.estimate_cost(DiscoveryQuery()).usd
+    # google: 2 runs x (0.00005 + 2 pages x 0.0045); bing: 2 runs x (0.0005 + 10 results x 0.0045)
+    assert est == pytest.approx(2 * (0.00005 + 2 * 0.0045) + 2 * (0.0005 + 10 * 0.0045))
+    assert est < 0.25
+
+
+def test_apify_intent_requires_paid_approval() -> None:
+    c, fake = _apify_intent(pages={}, serp={}, approved=False)
+    with pytest.raises(ConnectorError, match="not approved"):
+        c.discover(DiscoveryQuery())
+    assert fake.runs == []
+
+
+def test_apify_intent_runs_two_engines_caps_each_run_and_reads_only_stated_requests() -> None:
+    serp = {
+        "apify~google-search-scraper": _serp(
+            ["https://alpha.example/partners", "https://www.upwork.com/x"]
+        ),
+        "tri_angle~bing-search-scraper": _serp(["https://buyer.example/brief"]),
+    }
+    pages = {
+        "https://alpha.example/partners": '<meta property="article:published_time" content="2026-10-28T09:00:00Z"><p>We are looking for AI delivery partners and subcontractors for our client projects. Email partners@alpha.example.</p>',
+        "https://buyer.example/brief": '<meta property="article:published_time" content="2026-10-30T09:00:00Z"><p>We are looking for a developer to build an AI agent for support triage. Write to hi@buyer.example.</p>',
+    }
+    c, fake = _apify_intent(pages=pages, serp=serp)
+    res = c.discover(DiscoveryQuery())
+    actors = [a for a, _ in fake.runs]
+    assert sorted(set(actors)) == ["apify~google-search-scraper", "tri_angle~bing-search-scraper"]
+    assert all(float(cap) <= 0.06 for _, cap in fake.runs)  # a hard per-run maxTotalChargeUsd
+    assert fake.inputs[0]["queries"] == "a1\na2" and fake.inputs[0]["maxPagesPerQuery"] == 1
+    assert (
+        "quickDateRange" in fake.inputs[0] and "quickDateRange" not in fake.inputs[2]
+    )  # bing has no such field
+    kinds = {f.source_url: f.kind for f in res.findings}
+    assert kinds == {
+        "https://alpha.example/partners": SignalKind.PARTNER_ACTIVITY,
+        "https://buyer.example/brief": SignalKind.PROJECT_REQUEST,
+    }
+    assert res.actual_cost_usd == pytest.approx(
+        4 * 0.0123
+    )  # the provider-reported usage, not the estimate

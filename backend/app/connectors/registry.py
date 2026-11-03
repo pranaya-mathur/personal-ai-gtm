@@ -9,6 +9,7 @@ from app.connectors.apify import ApifyActorConnector
 from app.connectors.apify_specs import SPECS
 from app.connectors.base import DiscoveryConnector
 from app.connectors.intent_sources import (
+    ApifySearchIntentConnector,
     CanadaBuysConnector,
     FindATenderConnector,
     SearchIntentConnector,
@@ -37,6 +38,7 @@ _FACTORIES: dict[str, Factory] = {
     "canadabuys": lambda s: CanadaBuysConnector(s),
     "uk_find_a_tender": lambda s: FindATenderConnector(s),
     "intent_search": lambda s: SearchIntentConnector(s),
+    "apify_intent_search": lambda s: ApifySearchIntentConnector(s),
 }
 for _name, _spec in SPECS.items():
     _FACTORIES[_name] = lambda s, _spec=_spec: ApifyActorConnector(_spec, s)  # type: ignore[misc]

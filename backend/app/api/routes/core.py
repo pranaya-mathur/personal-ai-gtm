@@ -658,7 +658,7 @@ def source_performance(db: Session = Depends(get_db)) -> dict[str, object]:
         )
         spend = db.execute(
             select(func.coalesce(func.sum(ProviderSpend.amount_usd), 0)).where(
-                ProviderSpend.provider == prov
+                ProviderSpend.provider.in_([prov, f"apify:{prov}", f"brave:{prov}"])
             )
         ).scalar_one()
         views = []

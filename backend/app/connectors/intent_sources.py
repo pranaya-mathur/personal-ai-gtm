@@ -253,3 +253,110 @@ class SearchIntentConnector:
             contact_route=email,
             routes=routes,
         )
+
+
+# ----------------------------------------------------------------------------- Apify SERP intent
+GOOGLE_ACTOR = "apify/google-search-scraper"  # $0.0045/results page, $0.00005 start (FREE tier)
+BING_ACTOR = "tri_angle/bing-search-scraper"  # $0.0045/result, $0.0005 start (FREE tier)
+GOOGLE_PAGE_USD, GOOGLE_START_USD = 0.0045, 0.00005
+BING_RESULT_USD, BING_START_USD, BING_RESULTS_PER_PAGE = 0.0045, 0.0005, 10
+
+
+class ApifySearchIntentConnector(SearchIntentConnector):
+    """Intent queries through Apify SERP Actors (input/output schemas validated 2026-11-03).
+    BILLABLE: runs only with a token AND APIFY_PAID_EXECUTION_APPROVED=true, each run carries a
+    hard maxTotalChargeUsd, and spend is reserved against the Apify cap first. Two engines are
+    used so no single search scraper is a dependency. A hit is still only a URL to read."""
+
+    name = "apify_intent_search"
+    spend_family = "apify"
+
+    def __init__(
+        self, settings: Settings, client: Any = None, checker: SourceChecker | None = None
+    ) -> None:
+        super().__init__(settings, None, checker)
+        self._client = client
+
+    def _engines(self) -> list[str]:
+        return [e.strip() for e in self.settings.apify_search_engines.split(",") if e.strip()]
+
+    def _plan(self) -> list[tuple[str, str, list[str]]]:
+        """(engine, channel, queries) runs."""
+        s = self.settings
+        plan: list[tuple[str, str, list[str]]] = []
+        for engine in self._engines():
+            for channel, qs in (
+                ("agency", s.intent_queries_agency_list),
+                ("buyer", s.intent_queries_buyer_list),
+            ):
+                chosen = qs[: s.apify_search_bing_queries] if engine == "bing" else qs
+                if chosen:
+                    plan.append((engine, channel, chosen))
+        return plan
+
+    @staticmethod
+    def _run_cost(engine: str, n_queries: int) -> float:
+        if engine == "google":
+            return GOOGLE_START_USD + n_queries * GOOGLE_PAGE_USD
+        return BING_START_USD + n_queries * BING_RESULTS_PER_PAGE * BING_RESULT_USD
+
+    def estimate_cost(self, query: DiscoveryQuery) -> CostEstimate:
+        usd = sum(self._run_cost(e, len(qs)) for e, _, qs in self._plan())
+        return CostEstimate(usd=round(usd, 6), note=f"{len(self._plan())} Actor runs (worst case)")
+
+    def _get_client(self) -> Any:
+        if self._client is not None:
+            return self._client
+        from app.connectors.apify_client import ApifyClient
+
+        token = self.settings.apify_token
+        if token is None or not token.get_secret_value():
+            raise ConnectorError("APIFY_TOKEN is not set")
+        return ApifyClient(token, self.settings.apify_api_base)
+
+    def _input(self, engine: str, queries: list[str], query: DiscoveryQuery) -> dict[str, Any]:
+        run_input: dict[str, Any] = {"queries": "\n".join(queries), "maxPagesPerQuery": 1}
+        if engine == "google":
+            run_input["quickDateRange"] = "m1"
+            run_input["saveHtmlToKeyValueStore"] = False
+            if query.regions:
+                run_input["countryCode"] = query.regions[0].lower()[:2]
+        return run_input
+
+    def discover(self, query: DiscoveryQuery) -> DiscoveryResult:
+        if not self.settings.apify_paid_execution_approved:
+            raise ConnectorError(
+                "Paid Apify execution is not approved (APIFY_PAID_EXECUTION_APPROVED)"
+            )
+        client = self._get_client()
+        checker = self._checker or SourceChecker()
+        findings: list[RawFinding] = []
+        seen: set[tuple[str, str]] = set()
+        fetched: dict[str, tuple[SourceCheckStatus, str]] = {}
+        cost = 0.0
+        pages = 0
+        for engine, channel, queries in self._plan():
+            actor = GOOGLE_ACTOR if engine == "google" else BING_ACTOR
+            cap = round(self._run_cost(engine, len(queries)), 4)
+            run = client.run_actor(actor, self._input(engine, queries, query), cap)
+            used = run.get("usageTotalUsd")
+            cost += float(used) if isinstance(used, int | float) else cap
+            for item in client.dataset_items(run["defaultDatasetId"], 50):
+                for r in item.get("organicResults") or []:
+                    url = r.get("url") or ""
+                    if not url or (channel, url) in seen or is_excluded_source(url):
+                        continue
+                    seen.add((channel, url))
+                    if url not in fetched:
+                        if pages >= self.settings.search_max_pages:
+                            continue
+                        pages += 1
+                        fetched[url] = checker.fetch_page(url)
+                    f = self._read(fetched[url], url, channel, r.get("title"))
+                    if f is not None:
+                        findings.append(f)
+        return DiscoveryResult(
+            provider=self.name,
+            findings=findings[: query.max_results],
+            actual_cost_usd=round(cost, 6),
+        )

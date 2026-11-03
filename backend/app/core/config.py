@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     )
     search_freshness: str = "pm"  # Brave: pd | pw | pm (31 days) | py
     search_max_pages: int = 15  # pages read per run
+    apify_search_engines: str = "google,bing"  # Apify SERP Actors (billable; gated)
+    apify_search_bing_queries: int = 1  # queries per channel sent to Bing (billed per result)
     search_budget_usd: float | None = None  # lifetime cap for the "brave" spend family
     brave_api_key: SecretStr | None = None
     search_discovery_enabled: bool = False  # Brave queries only when explicitly turned on
