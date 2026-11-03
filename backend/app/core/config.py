@@ -12,6 +12,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://gtm:gtm@localhost:5432/gtm"
     cors_origins: str = "http://localhost:3000"
 
+    # Auth: "name:role:token,..." roles viewer|operator|admin. Empty = API refuses everything
+    # (except /health). AUTH_DISABLED is a local-development escape hatch only.
+    api_tokens: str = ""
+    auth_disabled: bool = False
+    api_rate_limit_per_minute: int = 300
+    api_mutation_limit_per_minute: int = 30
+
     enabled_connectors: str = "mock_opportunities,mock_agencies"
 
     spend_limit_per_run_usd: float = 1.00
@@ -50,7 +57,10 @@ class Settings(BaseSettings):
     ai_max_opportunities_per_run: int = 10
     # Qualification requires the evidence to mention at least one of these (whole words). Keeps
     # generic IT/software procurement from qualifying as an AI project.
-    small_team_max_value: float = 750000.0  # EUR/USD/GBP stated value above this = "large"
+    # Deal-size fit (compared numerically for EUR/USD/GBP only; other currencies stay unknown).
+    deal_preferred_min: float = 3000.0
+    deal_preferred_max: float = 10000.0
+    deal_acceptable_max: float = 100000.0  # above this = not realistic for a small team
     topic_terms: str = (
         "ai,artificial intelligence,machine learning,generative,llm,large language,rag,"
         "retrieval,chatbot,neural,nlp,agentic,computer vision,deep learning"

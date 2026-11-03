@@ -50,27 +50,36 @@ class SourceChecker:
         )
         self._resolver = resolver
 
-    def _url_is_safe(self, url: str) -> bool:
+    def _pin(self, url: str) -> str | None:
+        """Resolve ONCE, require every address to be public, and return the address to connect
+        to. Connecting to this exact IP (with the original Host/SNI) closes the window in which
+        DNS could change between validation and connection (DNS rebinding)."""
         parts = urlsplit(url)
         if parts.scheme not in {"http", "https"} or not parts.hostname:
-            return False
+            return None
         try:
             addrs = self._resolver(parts.hostname)
         except OSError:
-            return False
-        if not addrs:
-            return False
-        for a in addrs:
-            ip = ipaddress.ip_address(a)
-            if not ip.is_global:
-                return False
-        return True
+            return None
+        if not addrs or not all(ipaddress.ip_address(a).is_global for a in addrs):
+            return None
+        return addrs[0]
 
-    def _robots_allows(self, url: str) -> bool:
+    def _get(self, url: str, ip: str) -> httpx.Response:
+        parts = urlsplit(url)
+        host = f"[{ip}]" if ":" in ip else ip
+        netloc = host + (f":{parts.port}" if parts.port else "")
+        return self._http.get(
+            parts._replace(netloc=netloc).geturl(),
+            headers={"Host": parts.netloc},
+            extensions={"sni_hostname": parts.hostname},
+        )
+
+    def _robots_allows(self, url: str, ip: str) -> bool:
         parts = urlsplit(url)
         robots_url = f"{parts.scheme}://{parts.netloc}/robots.txt"
         try:
-            resp = self._http.get(robots_url)
+            resp = self._get(robots_url, ip)
         except httpx.HTTPError:
             return False  # cannot establish permission => do not fetch
         if resp.status_code >= 500:
@@ -86,10 +95,11 @@ class SourceChecker:
         Returns (CONFIRMED + raw body) on success, otherwise (BLOCKED/UNREACHABLE, "")."""
         current = url
         for _ in range(MAX_REDIRECTS + 1):
-            if not self._url_is_safe(current) or not self._robots_allows(current):
+            ip = self._pin(current)  # one resolution per hop, used for robots.txt and the page
+            if ip is None or not self._robots_allows(current, ip):
                 return SourceCheckStatus.BLOCKED, ""
             try:
-                resp = self._http.get(current)
+                resp = self._get(current, ip)
             except httpx.HTTPError:
                 return SourceCheckStatus.UNREACHABLE, ""
             if resp.status_code in {301, 302, 303, 307, 308} and "location" in resp.headers:
@@ -106,10 +116,11 @@ class SourceChecker:
             return SourceCheckStatus.MISMATCH
         current = url
         for _ in range(MAX_REDIRECTS + 1):
-            if not self._url_is_safe(current) or not self._robots_allows(current):
+            ip = self._pin(current)  # one resolution per hop, used for robots.txt and the page
+            if ip is None or not self._robots_allows(current, ip):
                 return SourceCheckStatus.BLOCKED
             try:
-                resp = self._http.get(current)
+                resp = self._get(current, ip)
             except httpx.HTTPError:
                 return SourceCheckStatus.UNREACHABLE
             if resp.status_code in {301, 302, 303, 307, 308} and "location" in resp.headers:

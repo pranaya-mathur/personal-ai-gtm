@@ -67,3 +67,12 @@ def classify_partner_text(text: str, ai_terms: list[str]) -> PartnerSignal | Non
     if active or model:
         return PartnerSignal("verified_model", (active + model)[:3], ai)
     return None
+
+
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def find_email(text: str) -> str | None:
+    """A contact route only if the source literally prints one; never constructed or guessed."""
+    m = _EMAIL.search(text)
+    return m.group(0) if m else None

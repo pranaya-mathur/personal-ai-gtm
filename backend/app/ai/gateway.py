@@ -15,7 +15,7 @@ from app.ai.claims import ClaimValidationError
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.llm.base import LLMClient, LLMDisabledError, LLMRefusalError, LLMTransientError, T
-from app.models import AiAnalysis, LlmUsage, ProviderSpend
+from app.models import AiAnalysis, LlmUsage
 from app.services.spend import SpendGuard, SpendLimitExceeded
 
 log = get_logger(__name__)
@@ -146,14 +146,22 @@ class LLMGateway:
             self._check_allowance(task, opportunity_id, run_id, est)
             if self.run_spent_usd(run_id) + est > self.settings.llm_spend_limit_per_run_usd:
                 raise SpendLimitExceeded("per-run LLM spend limit would be exceeded")
-            self.spend.check(est, run_id, "openai" if not self.client.is_mock else None)
+            reservation = None
+            if self.client.is_mock:
+                self.spend.check(est, run_id, None)
+            else:
+                reservation = self.spend.reserve(
+                    est, run_id, "openai", f"openai:{model}", f"llm:{task}"
+                )
             try:
                 result = self._call_with_retries(task, system, prompt, schema, max_out)
-            except LLMRefusalError as exc:
+            except LLMRefusalError as exc:  # usage unknown: the reservation stays (conservative)
                 self._store(task, opportunity_id, run_id, None, False, f"refused: {exc}")
                 self._note_failure(task, opportunity_id, run_id, agent, model, f"refused: {exc}")
                 return None
             cost = self.cost_usd(result.input_tokens, result.output_tokens)
+            if reservation is not None:
+                self.spend.settle(reservation, cost)
             try:
                 validator(result.parsed)
             except ClaimValidationError as exc:
@@ -252,15 +260,6 @@ class LLMGateway:
                 reason=(reason or None) and reason[:500],
             )
         )
-        if cost > 0:  # shared ledger so global daily/monthly limits include LLM spend
-            self.session.add(
-                ProviderSpend(
-                    provider=f"{result.provider}:{result.model}",
-                    run_id=run_id,
-                    amount_usd=math.ceil(cost * 10_000) / 10_000,
-                    description=f"llm:{task}",
-                )
-            )
         self.session.flush()
 
     def _store(  # type: ignore[no-untyped-def]

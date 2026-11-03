@@ -6,6 +6,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.agents.analytics import PipelineAnalyticsAgent
+from app.api.auth import Identity, require_role
 from app.connectors.apify_specs import SPECS
 from app.connectors.base import DiscoveryQuery
 from app.connectors.registry import known_connectors
@@ -35,7 +36,6 @@ from app.models.enums import (
 from app.orchestrator.runner import enqueue_run
 from app.schemas.api import (
     AnalysisOut,
-    ApprovalRequest,
     BoardRow,
     BudgetLine,
     CostSummary,
@@ -52,15 +52,18 @@ from app.schemas.api import (
 )
 from app.utils import utcnow
 
-router = APIRouter()
+public_router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_role("viewer"))])
+OPERATOR = Depends(require_role("operator"))
+ADMIN = Depends(require_role("admin"))
 
 
-@router.get("/health")
+@public_router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.get("/health/ready")
+@public_router.get("/health/ready")
 def ready(db: Session = Depends(get_db)) -> dict[str, str]:
     db.execute(text("SELECT 1"))
     return {"status": "ready"}
@@ -211,7 +214,9 @@ def list_profiles(db: Session = Depends(get_db)) -> list[SearchProfile]:
     return list(db.execute(select(SearchProfile).order_by(SearchProfile.name)).scalars())
 
 
-@router.post("/search-profiles", response_model=ProfileOut, status_code=201)
+@router.post(
+    "/search-profiles", response_model=ProfileOut, status_code=201, dependencies=[OPERATOR]
+)
 def create_profile(body: ProfileCreate, db: Session = Depends(get_db)) -> SearchProfile:
     unknown = [c for c in body.connector_names if c not in known_connectors()]
     if unknown:
@@ -224,7 +229,7 @@ def create_profile(body: ProfileCreate, db: Session = Depends(get_db)) -> Search
     return profile
 
 
-@router.patch("/search-profiles/{profile_id}", response_model=ProfileOut)
+@router.patch("/search-profiles/{profile_id}", response_model=ProfileOut, dependencies=[OPERATOR])
 def update_profile(
     profile_id: uuid.UUID, body: ProfileUpdate, db: Session = Depends(get_db)
 ) -> SearchProfile:
@@ -245,7 +250,7 @@ def list_evidence(run_id: uuid.UUID | None = None, db: Session = Depends(get_db)
     return list(db.execute(stmt).scalars())
 
 
-@router.post("/runs", response_model=RunOut, status_code=202)
+@router.post("/runs", response_model=RunOut, status_code=202, dependencies=[OPERATOR])
 def create_run(body: RunCreate, db: Session = Depends(get_db)) -> WorkflowRun:
     query = body.query
     if body.profile_id is not None:
@@ -310,9 +315,13 @@ def get_opportunity(opp_id: uuid.UUID, db: Session = Depends(get_db)) -> Opportu
     return OpportunityDetail(**data, evidence=list(evs))
 
 
-@router.post("/opportunities/{opp_id}/verify", response_model=OpportunityOut)
+@router.post(
+    "/opportunities/{opp_id}/verify", response_model=OpportunityOut, dependencies=[OPERATOR]
+)
 def verify_opportunity(
-    opp_id: uuid.UUID, body: ApprovalRequest, db: Session = Depends(get_db)
+    opp_id: uuid.UUID,
+    who: Identity = OPERATOR,
+    db: Session = Depends(get_db),
 ) -> Opportunity:
     """Human verification: the only path to VERIFIED. Stale evidence cannot be verified."""
     opp = db.get(Opportunity, opp_id)
@@ -321,6 +330,8 @@ def verify_opportunity(
     if opp.verification_status == VerificationStatus.STALE:
         raise HTTPException(409, "stale opportunities cannot be verified; refresh the source")
     opp.verification_status = VerificationStatus.VERIFIED
+    opp.verified_by = who.name
+    opp.verified_at = utcnow()
     db.commit()
     return opp
 
@@ -335,7 +346,7 @@ def list_drafts(
     return list(db.execute(stmt).scalars())
 
 
-@router.patch("/drafts/{draft_id}", response_model=DraftOut)
+@router.patch("/drafts/{draft_id}", response_model=DraftOut, dependencies=[OPERATOR])
 def edit_draft(
     draft_id: uuid.UUID, body: DraftUpdate, db: Session = Depends(get_db)
 ) -> OutreachDraft:
@@ -370,17 +381,17 @@ def _decide(
 
 @router.post("/drafts/{draft_id}/approve", response_model=DraftOut)
 def approve_draft(
-    draft_id: uuid.UUID, body: ApprovalRequest, db: Session = Depends(get_db)
+    draft_id: uuid.UUID, who: Identity = ADMIN, db: Session = Depends(get_db)
 ) -> OutreachDraft:
-    """Marks approval only. Milestone 1 has no sender, so nothing is ever transmitted."""
-    return _decide(db, draft_id, body.approver, OutreachStatus.APPROVED)
+    """Approval by the AUTHENTICATED admin only. There is no sender; nothing is transmitted."""
+    return _decide(db, draft_id, who.name, OutreachStatus.APPROVED)
 
 
 @router.post("/drafts/{draft_id}/reject", response_model=DraftOut)
 def reject_draft(
-    draft_id: uuid.UUID, body: ApprovalRequest, db: Session = Depends(get_db)
+    draft_id: uuid.UUID, who: Identity = OPERATOR, db: Session = Depends(get_db)
 ) -> OutreachDraft:
-    return _decide(db, draft_id, body.approver, OutreachStatus.REJECTED)
+    return _decide(db, draft_id, who.name, OutreachStatus.REJECTED)
 
 
 @router.get("/metrics")
@@ -506,7 +517,7 @@ def board(
     return rows
 
 
-@router.post("/runs/{run_id}/cancel", response_model=RunOut)
+@router.post("/runs/{run_id}/cancel", response_model=RunOut, dependencies=[OPERATOR])
 def cancel_run(run_id: uuid.UUID, db: Session = Depends(get_db)) -> WorkflowRun:
     """Cancels a queued or running job. A running job stops at the next node boundary."""
     run = db.get(WorkflowRun, run_id)

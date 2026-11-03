@@ -1,4 +1,5 @@
-export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// The browser only ever talks to the dashboard's own server; /api/gtm adds the API token there.
+export const API_URL = "/api/gtm";
 
 export type Category = "confirmed_demand" | "verified_partnership" | "speculative_prospect";
 

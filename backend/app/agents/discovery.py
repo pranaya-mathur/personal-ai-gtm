@@ -1,7 +1,7 @@
 import uuid
 
 from sqlalchemy.orm import Session
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.connectors.base import (
     ConnectorError,
@@ -44,15 +44,32 @@ class _DiscoveryAgent:
         self.spend = spend
         self.connectors = [c for c in connectors if c.kinds & self.kinds]
 
-    @staticmethod
-    @retry(
-        retry=retry_if_exception_type(ConnectorError),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=0.5, max=8),
-        reraise=True,
-    )
-    def _call(connector: DiscoveryConnector, query: DiscoveryQuery) -> DiscoveryResult:
-        return connector.discover(query)
+    def _call(
+        self, connector: DiscoveryConnector, query: DiscoveryQuery, run_id: uuid.UUID | None
+    ) -> DiscoveryResult:
+        """Each attempt reserves its own worst-case cost before it can spend anything; a failed
+        attempt keeps its reservation (a provider may bill a run that errored)."""
+        for attempt in Retrying(
+            retry=retry_if_exception_type(ConnectorError),
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=0.5, max=8),
+            reraise=True,
+        ):
+            with attempt:
+                est = connector.estimate_cost(query).usd
+                family = "apify" if connector.name.startswith("apify") else None
+                reservation = None
+                if est > 0:
+                    reservation = self.spend.reserve(
+                        est, run_id, family, connector.name, "discovery"
+                    )
+                else:
+                    self.spend.check(0.0, run_id, family)
+                result = connector.discover(query)
+                if reservation is not None:
+                    self.spend.settle(reservation, result.actual_cost_usd)
+                return result
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def run(self, query: DiscoveryQuery, run_id: uuid.UUID | None) -> dict[str, object]:
         opportunity_ids: list[str] = []
@@ -63,12 +80,7 @@ class _DiscoveryAgent:
             if query.connector_names is not None and connector.name not in query.connector_names:
                 continue
             try:
-                self.spend.check(
-                    connector.estimate_cost(query).usd,
-                    run_id,
-                    "apify" if connector.name.startswith("apify") else None,
-                )
-                result = self._call(connector, query)
+                result = self._call(connector, query, run_id)
             except SpendLimitExceeded as exc:
                 errors.append(f"{connector.name}: blocked ({exc})")
                 stats.append(_stat(connector, errors=1, status="blocked"))
@@ -79,8 +91,6 @@ class _DiscoveryAgent:
                 stats.append(_stat(connector, errors=1, status="failed"))
                 log.error("connector_failed", provider=connector.name, error=str(exc))
                 continue
-            if result.actual_cost_usd:
-                self.spend.record(connector.name, result.actual_cost_usd, run_id, "discovery")
             st = _stat(connector, status="succeeded", cost=result.actual_cost_usd)
             stats.append(st)
             for finding in result.findings:

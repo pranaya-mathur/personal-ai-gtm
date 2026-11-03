@@ -178,6 +178,8 @@ class Opportunity(Base, IdMixin, TimestampMixin):
         String(24), default=Triage.UNASSESSED, server_default="unassessed", nullable=False
     )
     rejection_reason: Mapped[str | None] = mapped_column(String(64))
+    verified_by: Mapped[str | None] = mapped_column(String(128))  # authenticated identity
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     assessment: Mapped[dict] = mapped_column(JsonType, default=dict, nullable=False)  # type: ignore[type-arg]
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False

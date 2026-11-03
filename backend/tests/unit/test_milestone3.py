@@ -90,8 +90,8 @@ def test_missing_contact_and_deadline_keep_it_in_verification() -> None:
 
 
 def test_large_stated_value_fails_small_team_realism_and_blocks_actionable() -> None:
-    r = a(title="AI platform", text="Build an AI platform.", budget_text="5000000 EUR")
-    assert r.criteria["realistic_for_small_team"]["result"] == "fail"
+    r = a(title="AI platform", text="Build an AI platform.", budget_text="500000 EUR")
+    assert r.criteria["deal_size"]["result"] == "fail"
     assert r.triage == "needs_verification"
 
 
@@ -137,7 +137,7 @@ def _checker(pages: dict[str, tuple[int, str]]) -> SourceChecker:
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path == "/robots.txt":
             return httpx.Response(200, text="User-agent: *\nDisallow: /private\n")
-        code, body = pages.get(str(req.url), (404, ""))
+        code, body = pages.get(f"https://{req.headers['host']}{req.url.path}", (404, ""))
         return httpx.Response(code, text=body)
 
     return SourceChecker(
@@ -163,7 +163,9 @@ def test_partner_page_connector_reads_only_listed_permitted_pages() -> None:
     res = PublicPartnerPageConnector(s, _checker(pages)).discover(DiscoveryQuery())
     assert [f.organization_domain for f in res.findings] == ["alpha.example"]  # robots blocked beta
     f = res.findings[0]
-    assert f.partnership_class == "active_requirement" and f.kind is SignalKind.PARTNER_ACTIVITY
+    # a live page is undated: it can evidence a MODEL but never a current request
+    assert f.partnership_class == "verified_model" and f.kind is SignalKind.PARTNER_ACTIVITY
+    assert f.source_status == "unknown" and f.contact_route is None  # page URL is not a contact
     assert f.source_url == "https://alpha.example/partners" and f.evergreen
 
 
@@ -428,3 +430,108 @@ def test_dry_run_audit_changes_nothing(session) -> None:  # type: ignore[no-unty
     rows = audit(session, Settings(database_url="sqlite://"), apply=False)
     assert rows[0]["after"]["triage"] == "rejected"
     assert session.get(Opportunity, oid).triage == "unassessed"  # type: ignore[union-attr]
+
+
+def test_fetch_connects_to_the_pinned_ip_with_original_host_and_sni() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        return httpx.Response(404 if req.url.path == "/robots.txt" else 200, text="hello")
+
+    calls = {"n": 0}
+
+    def resolver(host: str) -> list[str]:  # a hostile DNS: answers differently each time
+        calls["n"] += 1
+        return ["93.184.216.34"] if calls["n"] == 1 else ["127.0.0.1"]
+
+    c = SourceChecker(transport=httpx.MockTransport(handler), resolver=resolver)
+    status, body = c.fetch_page("https://a.example/p")
+    assert status.value == "confirmed" and body == "hello"
+    page = seen[-1]
+    assert page.url.host == "93.184.216.34"  # connected to the validated address
+    assert page.headers["host"] == "a.example"
+    assert page.extensions["sni_hostname"] == "a.example"
+
+
+def test_non_public_resolution_is_never_connected_to() -> None:
+    hits: list[str] = []
+    c = SourceChecker(
+        transport=httpx.MockTransport(lambda r: hits.append(str(r.url)) or httpx.Response(200)),
+        resolver=lambda h: ["93.184.216.34", "10.0.0.1"],  # one private answer poisons the set
+    )
+    assert c.fetch_page("https://a.example/")[0].value == "blocked"
+    assert hits == []
+
+
+def test_evergreen_partner_page_can_never_become_an_actionable_project(session) -> None:  # type: ignore[no-untyped-def]
+    s = Settings(database_url="sqlite://", agency_seed_urls="alpha.example")
+    pages = {
+        "https://alpha.example/partners": (
+            200,
+            "<title>Alpha Labs</title><p>We are looking for AI delivery partners and "
+            "subcontractors to join our client projects. Write to partners@alpha.example.</p>",
+        )
+    }
+    f = PublicPartnerPageConnector(s, _checker(pages)).discover(DiscoveryQuery()).findings[0]
+    assert f.partnership_class == "verified_model" and f.contact_route == "partners@alpha.example"
+    ingest_finding(session, f, "public_partner_pages", None, 90)
+    from app.services.triage import assess_opportunity
+
+    opp = session.execute(select(Opportunity)).scalars().one()
+    assert opp.category == OpportunityCategory.VERIFIED_PARTNERSHIP
+    assert assess_opportunity(session, opp, s).triage == "needs_verification"
+
+
+def test_dated_agency_request_still_needs_a_human_and_a_real_contact(session) -> None:  # type: ignore[no-untyped-def]
+    f = RawFinding(
+        kind=SignalKind.PARTNER_ACTIVITY, title="Gamma seeks AI subcontractors",
+        source_url="https://gamma.example/news/1",
+        original_text="We are looking for AI subcontractors to build RAG assistants.",
+        published_at=NOW, organization_name="Gamma", organization_domain="gamma.example",
+        partnership_class="active_requirement", contact_route="https://gamma.example/news/1",
+    )  # fmt: skip
+    ingest_finding(session, f, "public_announcement_feeds", None, 90)
+    from app.services.triage import assess_opportunity
+
+    opp = session.execute(select(Opportunity)).scalars().one()
+    assert opp.category == OpportunityCategory.CONFIRMED_DEMAND  # the source states a need
+    r = assess_opportunity(session, opp, Settings(database_url="sqlite://"))
+    assert r.triage == "needs_verification"
+    assert r.criteria["contact_route"]["result"] == "unknown"  # the page itself is no contact
+    assert r.criteria["requirement_evidence"]["result"] == "unknown"
+
+
+def test_deal_size_bands_and_unknown_budget() -> None:
+    inside = a(title="AI chatbot build", text="Build a chatbot.", budget_text="8000 USD")
+    assert (
+        inside.criteria["deal_size"]["result"] == "pass"
+        and "preferred" in inside.criteria["deal_size"]["detail"]
+    )
+    mid = a(title="AI chatbot build", text="Build a chatbot.", budget_text="60000 EUR")
+    assert (
+        mid.criteria["deal_size"]["result"] == "pass"
+        and "outside the preferred" in mid.criteria["deal_size"]["detail"]
+    )
+    assert (
+        a(title="AI chatbot", text="Build a chatbot.").criteria["deal_size"]["result"] == "unknown"
+    )
+    big = a(title="AI chatbot", text="Build a chatbot.", budget_text="2500000 EUR")
+    assert big.criteria["deal_size"]["result"] == "fail" and big.triage == "needs_verification"
+
+
+def test_turnover_requirements_block_actionable() -> None:
+    r = a(title="AI chatbot", text="Build a chatbot. Minimum annual turnover of 5M required.")
+    assert (
+        r.criteria["procurement_complexity"]["result"] == "fail"
+        and r.triage == "needs_verification"
+    )
+
+
+def test_contact_route_must_not_be_the_source_page_itself() -> None:
+    from app.services.triage import valid_route
+
+    assert valid_route("buyer@x.example", ["https://x.example/n"])
+    assert not valid_route("https://x.example/n/", ["https://x.example/n"])
+    assert valid_route("https://x.example/apply", ["https://x.example/n"])
+    assert not valid_route(None, []) and not valid_route("not a route", [])

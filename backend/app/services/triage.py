@@ -42,11 +42,13 @@ _ONSITE = re.compile(
     r"\b(on-?site|on site|physical presence|on the premises|at the premises)\b", re.I
 )
 _SUBCONTRACT = re.compile(r"\b(sub-?contract\w*|consorti\w+|joint venture|partnership of)\b", re.I)
-_LARGE_CONDITIONS = re.compile(
-    r"\b(minimum (annual )?turnover|turnover of at least|framework agreement|"
-    r"dynamic purchasing system|security clearance)\b",
+_BARRIER = re.compile(
+    r"\b(minimum (annual )?turnover|turnover of at least|security clearance|"
+    r"bank guarantee|performance bond)\b",
     re.I,
 )
+_FRAMEWORK = re.compile(r"\b(framework agreement|dynamic purchasing system|DPS|call-?off)\b", re.I)
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _AMOUNT = re.compile(r"(\d[\d.,]*)\s*([A-Za-z]{3})?")
 _CURRENCIES = {"EUR", "USD", "GBP"}  # compared numerically; anything else stays unknown
 
@@ -122,25 +124,52 @@ def stage_a(title: str, text: str, terms: list[str]) -> tuple[TechnicalRelevance
     return TechnicalRelevance.UNCLEAR, info
 
 
-def _budget(budget_text: str | None, ceiling: float) -> tuple[str, str]:
+def _parse_value(budget_text: str | None) -> tuple[float | None, str]:
     if not budget_text:
-        return "unknown", "budget not stated"
+        return None, ""
     m = _AMOUNT.search(budget_text.replace(" ", ""))
     cur = (m.group(2) or "").upper() if m else ""
     if not m or cur not in _CURRENCIES:
-        return "unknown", f"budget {budget_text!r} (currency not comparable)"
+        return None, cur
+    raw = m.group(1)
     try:
-        raw = m.group(1)
         value = (
             float(raw.replace(",", ""))
             if "," in raw and "." in raw
             else float(raw.replace(",", "."))
         )
     except ValueError:
-        return "unknown", f"budget {budget_text!r} could not be parsed"
-    if value > ceiling:
-        return "fail", f"stated value {budget_text} exceeds {ceiling:,.0f} (large procurement)"
-    return "pass", f"stated value {budget_text} within {ceiling:,.0f}"
+        return None, cur
+    return value, cur
+
+
+def _deal_size(budget_text: str | None, s: Settings) -> tuple[str, str]:
+    """Preferred / acceptable / too-large bands. An unknown budget stays unknown."""
+    if not budget_text:
+        return "unknown", "budget not stated"
+    value, _ = _parse_value(budget_text)
+    if value is None:
+        return "unknown", f"budget {budget_text!r} (currency not comparable)"
+    if value > s.deal_acceptable_max:
+        return (
+            "fail",
+            f"stated value {budget_text} exceeds acceptable maximum {s.deal_acceptable_max:,.0f}",
+        )
+    if s.deal_preferred_min <= value <= s.deal_preferred_max:
+        return "pass", f"stated value {budget_text} is inside the preferred range"
+    return "pass", f"stated value {budget_text} is acceptable but outside the preferred range"
+
+
+def valid_route(route: str | None, source_urls: list[str]) -> bool:
+    """A usable route is an email address or a URL that is NOT merely the page that was read."""
+    if not route:
+        return False
+    if _EMAIL.match(route):
+        return True
+    own = {u.rstrip("/").lower() for u in source_urls}
+    return (
+        route.lower().startswith(("http://", "https://")) and route.rstrip("/").lower() not in own
+    )
 
 
 def assess(
@@ -155,10 +184,12 @@ def assess(
     contact_route: str | None,
     known_contacts: int,
     settings: Settings,
+    source_urls: list[str] | None = None,
     ai: AiSignal | None = None,
     now: datetime | None = None,
 ) -> Assessment:
     now = now or datetime.now(UTC)
+    route_ok = valid_route(contact_route, source_urls or []) or bool(known_contacts)
     relevance, a_info = stage_a(title, text, settings.topic_term_list)
     a_info["source"] = "deterministic"
     if ai is not None:
@@ -250,23 +281,31 @@ def assess(
         )
     else:
         put("remote_or_subcontract", "unknown", "delivery location/model not stated")
-    b_res, b_detail = _budget(budget_text, settings.small_team_max_value)
-    if b_res == "unknown" and _LARGE_CONDITIONS.search(text):
-        b_res, b_detail = (
-            "unknown",
-            "framework/turnover/clearance conditions suggest a large procurement",
-        )
-    put("realistic_for_small_team", b_res, b_detail)
+    d_res, d_detail = _deal_size(budget_text, settings)
+    put("deal_size", d_res, d_detail)
+    if _BARRIER.search(text):
+        put("procurement_complexity", "fail", "turnover/clearance/guarantee requirements stated")
+    elif _FRAMEWORK.search(text):
+        put("procurement_complexity", "unknown", "framework / purchasing-system access route")
+    else:
+        put("procurement_complexity", "pass", "no complexity barrier stated in the source")
     put(
         "contact_route",
-        "pass" if (contact_route or known_contacts) else "unknown",
-        contact_route
-        or (
+        "pass" if route_ok else "unknown",
+        (contact_route or "known contact")
+        if route_ok
+        else (
             "known contact"
             if known_contacts
-            else "only the notice page; no buyer contact in source"
+            else "no usable buyer contact in source (the page itself is not a contact route)"
         ),
     )
+    if org_kind == OrganizationKind.AGENCY:
+        put(
+            "requirement_evidence",
+            "unknown",
+            "agency-stated need must be confirmed as current by a human",
+        )
     put("budget", "pass", budget_text if budget_text else "UNKNOWN (not stated in source)")
 
     missing = [f"{k}: {v['detail']}" for k, v in crit.items() if v["result"] == "unknown"]
@@ -320,13 +359,13 @@ def assess(
 def assess_opportunity(
     session: Session, opp: Opportunity, settings: Settings, ai: AiSignal | None = None
 ) -> Assessment:
-    texts = list(
-        session.execute(
-            select(Evidence.original_text)
-            .join(OpportunityEvidence, OpportunityEvidence.evidence_id == Evidence.id)
-            .where(OpportunityEvidence.opportunity_id == opp.id)
-        ).scalars()
-    )
+    rows = session.execute(
+        select(Evidence.original_text, Evidence.source_url)
+        .join(OpportunityEvidence, OpportunityEvidence.evidence_id == Evidence.id)
+        .where(OpportunityEvidence.opportunity_id == opp.id)
+    ).all()
+    texts = [r[0] for r in rows]
+    urls = [r[1] for r in rows]
     org = session.get(Organization, opp.organization_id) if opp.organization_id else None
     contacts = (
         len(session.execute(select(Contact.id).where(Contact.organization_id == org.id)).all())
@@ -344,6 +383,7 @@ def assess_opportunity(
         contact_route=opp.contact_route,
         known_contacts=contacts,
         settings=settings,
+        source_urls=urls,
         ai=ai,
     )
 

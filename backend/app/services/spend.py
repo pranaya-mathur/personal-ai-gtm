@@ -1,7 +1,9 @@
+import math
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -10,6 +12,19 @@ from app.models import ProviderSpend
 
 class SpendLimitExceeded(Exception):
     pass
+
+
+_LOCK_KEY = 7_340_001  # arbitrary constant for pg_advisory_xact_lock
+
+
+@dataclass(frozen=True)
+class Reservation:
+    id: uuid.UUID
+    amount_usd: float
+
+
+def _round_up(usd: float) -> float:
+    return math.ceil(usd * 10_000) / 10_000
 
 
 class SpendGuard:
@@ -72,3 +87,62 @@ class SpendGuard:
             )
         )
         self.session.flush()
+
+    # ---- atomic reservations -------------------------------------------------------------
+    def reserve(
+        self,
+        estimated_usd: float,
+        run_id: uuid.UUID | None,
+        family: str | None,
+        provider: str,
+        description: str,
+    ) -> Reservation:
+        """Check limits AND record the estimated spend in one serialized step, so concurrent
+        workers cannot both pass the same remaining-budget check. On PostgreSQL this runs in its
+        own short transaction under an advisory lock and commits immediately, making the
+        reservation visible to every other worker before the paid call starts."""
+        amount = _round_up(estimated_usd)
+        bind = self.session.get_bind()
+        if bind.dialect.name == "postgresql":
+            with Session(bind) as s:
+                s.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _LOCK_KEY})
+                SpendGuard(s, self.settings).check(amount, run_id, family)
+                row = ProviderSpend(
+                    provider=provider,
+                    run_id=run_id,
+                    amount_usd=amount,
+                    description=f"reserved:{description}",
+                )
+                s.add(row)
+                s.flush()
+                rid = row.id
+                s.commit()
+            return Reservation(rid, amount)
+        self.check(amount, run_id, family)
+        row = ProviderSpend(
+            provider=provider,
+            run_id=run_id,
+            amount_usd=amount,
+            description=f"reserved:{description}",
+        )
+        self.session.add(row)
+        self.session.flush()
+        return Reservation(row.id, amount)
+
+    def settle(self, reservation: Reservation, actual_usd: float) -> None:
+        """Replace the estimate with the provider-reported/computed actual. Never called for
+        failed or unmetered calls: those keep the full estimate (conservative)."""
+        amount = _round_up(actual_usd)
+        stmt = (
+            update(ProviderSpend)
+            .where(ProviderSpend.id == reservation.id)
+            .values(amount_usd=amount, description="settled")
+        )
+        bind = self.session.get_bind()
+        if bind.dialect.name == "postgresql":
+            with Session(bind) as s:
+                s.execute(stmt)
+                s.commit()
+        else:
+            self.session.execute(stmt)
+            self.session.flush()

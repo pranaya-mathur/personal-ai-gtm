@@ -68,7 +68,7 @@ export default function Dashboard() {
       <header>
         <div>
           <h1>Personal AI GTM Command Center</h1>
-          <span className="muted">Milestone 2 — mock by default; paid Apify runs need explicit approval; no outreach is ever sent</span>
+          <span className="muted">Development stage — mock by default; paid runs need explicit approval; nothing is ever sent</span>
         </div>
         <button
           disabled={starting}
@@ -157,7 +157,7 @@ export default function Dashboard() {
           {drafts.map((d) => (
             <div className="item" key={d.id}>{d.subject ?? "(no subject)"}</div>
           ))}
-          <p className="muted">Approval happens via the API; editing UI arrives in Milestone 2.</p>
+          <p className="muted">Approval is an admin-only API action recorded under the approver's name; the draft editor is not built yet.</p>
         </div>
         <div className="card">
           <h2>Workflow runs</h2>

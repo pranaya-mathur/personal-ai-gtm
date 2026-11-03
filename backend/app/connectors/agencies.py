@@ -27,7 +27,12 @@ from app.connectors.base import (
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.models.enums import SourceCheckStatus
-from app.services.partnership import classify_partner_text, page_title, visible_text
+from app.services.partnership import (
+    classify_partner_text,
+    find_email,
+    page_title,
+    visible_text,
+)
 from app.services.source_check import USER_AGENT, SourceChecker
 
 log = get_logger(__name__)
@@ -103,21 +108,23 @@ class PublicPartnerPageConnector:
                 continue
             seen.add(key)
             org = _org_name(page_title(body), host)
+            # A live page carries no date: it can show a MODEL, never prove a CURRENT request.
+            cls = "verified_model"
             findings.append(
                 RawFinding(
                     kind=SignalKind.PARTNER_ACTIVITY,
-                    title=f"{org} {_TITLE[signal.partnership_class]}",
+                    title=f"{org} {_TITLE[cls]}",
                     source_url=url,
                     original_text="\n".join(signal.sentences),
                     organization_name=org,
                     organization_domain=host,
-                    provider_confidence=_CONF[signal.partnership_class],
-                    partnership_class=signal.partnership_class,
+                    provider_confidence=_CONF[cls],
+                    partnership_class=cls,
                     evergreen=True,
-                    source_status="open"
-                    if signal.partnership_class == "active_requirement"
-                    else "unknown",
-                    contact_route=url,
+                    source_status="unknown",
+                    contact_route=find_email(
+                        "\n".join(signal.sentences) + "\n" + visible_text(body)
+                    ),
                 )
             )
         return DiscoveryResult(provider=self.name, findings=findings[: query.max_results])
@@ -208,10 +215,8 @@ class AnnouncementFeedConnector:
                     organization_domain=host,
                     provider_confidence=_CONF[signal.partnership_class],
                     partnership_class=signal.partnership_class,
-                    source_status="open"
-                    if signal.partnership_class == "active_requirement"
-                    else "unknown",
-                    contact_route=link,
+                    source_status="unknown",  # a dated post does not prove the need is still open
+                    contact_route=find_email(text),
                 )
             )
         return out
