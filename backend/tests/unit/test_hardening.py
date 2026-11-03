@@ -796,3 +796,41 @@ def test_judge_may_clear_an_ambiguous_claim_and_its_failure_propagates() -> None
         raise AssertionError("budget failure must surface, not silently pass")
     except SpendLimitExceeded:
         pass
+
+
+# ---------------------------------------------------------------- round 2: HN thread selection
+def test_hn_freelancer_connector_reads_the_newest_threads_not_a_frozen_author_tag() -> None:
+    from app.connectors.public_apis import HackerNewsFreelancerConnector
+
+    seen: dict[str, object] = {}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if "search_by_date" in req.url.path:
+            seen["tags"] = req.url.params["tags"]
+            hits = [
+                {
+                    "title": "Ask HN: Freelancer? Seeking freelancer? (October 2026)",
+                    "created_at": "2026-10-01",
+                    "objectID": "2",
+                },
+                {
+                    "title": "Ask HN: Freelancer? Seeking freelancer? (November 2026)",
+                    "created_at": "2026-11-02",
+                    "objectID": "3",
+                },
+                {
+                    "title": "Ask HN: Who is hiring? (November 2026)",
+                    "created_at": "2026-11-02",
+                    "objectID": "9",
+                },
+            ]
+            return httpx.Response(200, json={"hits": hits})
+        seen.setdefault("items", []).append(req.url.path.rsplit("/", 1)[-1])  # type: ignore[union-attr]
+        return httpx.Response(200, json={"children": []})
+
+    c = HackerNewsFreelancerConnector(
+        Settings(database_url="sqlite://"), httpx.MockTransport(handler)
+    )
+    c.discover(DiscoveryQuery())
+    assert "author_whoishiring" not in str(seen["tags"])
+    assert seen["items"] == ["3", "2"]  # newest first; the hiring thread is not read

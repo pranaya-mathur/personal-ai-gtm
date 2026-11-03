@@ -343,16 +343,24 @@ class HackerNewsFreelancerConnector(_Free):
                 r = c.get(
                     f"{_HN}/search_by_date",
                     params={
-                        "query": "Seeking freelancer",
-                        "tags": "story,author_whoishiring",
-                        "hitsPerPage": 10,
+                        # NOT author_whoishiring: since Nov 2025 the monthly thread is posted by
+                        # other accounts, so that tag silently froze this source at Oct 2025
+                        "query": "Freelancer? Seeking freelancer?",
+                        "tags": "story",
+                        "hitsPerPage": 20,
                     },
                 )
                 if r.status_code != 200:
                     raise ConnectorError(f"HN search returned {r.status_code}")
-                threads = [
-                    h for h in r.json().get("hits", []) if "Freelancer" in h.get("title", "")
-                ][:2]
+                threads = sorted(
+                    (
+                        h
+                        for h in r.json().get("hits", [])
+                        if h.get("title", "").startswith("Ask HN: Freelancer? Seeking freelancer?")
+                    ),
+                    key=lambda h: h.get("created_at", ""),
+                    reverse=True,
+                )[:3]
                 for th in threads:
                     item = c.get(f"{_HN}/items/{th['objectID']}")
                     if item.status_code != 200:

@@ -24,8 +24,8 @@ Historical yield is from the live database before the hardening run (records →
 | World Bank notices | A | official, free | no (mostly individual/on-site consulting) | yes | yes | no | yes | 54 → 0 | $0 |
 | CanadaBuys | A | official, free | some | yes | yes | often supply-arrangement only | yes | 3 → 0 | $0 |
 | SAM.gov | A | official, **needs free API key (not configured)** | RFQs/micro-purchases exist | yes | yes | needs SAM registration | yes | not run | $0 |
-| HN "Seeking freelancer" | A | public API | yes (this is the right size) | yes | poster handle/email | yes | yes | 2 → 0 (very low volume) | $0 |
-| Partner pages / feeds / Wikidata / GitHub candidates | B | permitted, robots-respecting | n/a | models, not requests | agency yes | yes | candidates yes; pages bounded | 2 verified models, 0 active needs | $0 |
+| HN "Seeking freelancer" | A | public API | yes (right size) | yes | poster handle/email | yes | yes | connector was frozen at Oct 2025 by a stale author tag (fixed); Sep–Nov 2026 threads contain 0 buyers, ~60 SEEKING WORK posts | $0 |
+| Partner pages / feeds / Wikidata / GitHub candidates | B | permitted, robots-respecting | n/a | models, not requests | agency yes | yes | candidates yes; pages bounded | 0 real models (the 2 earlier "verified" were mock fixtures), 0 active needs | $0 |
 | HN "Who is hiring" triggers | C | public API | n/a | trigger only | company | yes, as prospects | yes | 27 → 7 prospects, 0 demand | $0 |
 | TED planning notices | C | official | n/a | before tender | yes | prospects | yes | 4 prospects | $0 |
 | Brave / Apify SERP | A/B | paid, **off** | n/a | n/a | n/a | n/a | yes | prior paid trials ≈ no usable records | per call |
