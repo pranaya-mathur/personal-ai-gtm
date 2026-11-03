@@ -27,6 +27,11 @@ TASK_INSTRUCTIONS = {
         "engineering team given the stated scope and size. suggested_next_action: one concrete step "
         "(e.g. read a named document, use the stated submission route); never invent a contact."
     ),
+    "claim_support_check": (
+        "For each numbered CLAIM below, decide whether its QUOTE, read in the context of the "
+        "evidence, genuinely establishes the claim. supports=false when the claim overstates, "
+        "reverses or goes beyond the quote. Return one result per index."
+    ),
     "evidence_evaluation": "Judge whether the evidence actually supports the opportunity as described (title and category). reliability is 0..1. List concrete issues.",
     "research_brief": "Produce source-backed findings useful for approaching this buyer, plus open questions the evidence cannot answer.",
     "qualification": "Assess fit for a team that delivers paid AI/ML implementation projects. fit_score and criterion scores are 0..100; every criterion needs a supporting claim. Name risks plainly.",

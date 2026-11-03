@@ -341,7 +341,11 @@ def test_direct_buyer_with_ai_request_and_contact_is_actionable_but_expired_is_r
         )  # fmt: skip
 
     ok = ingest_finding(
-        session, f("Open AI assistant", "open", NOW + timedelta(days=9)), "hn_freelancer_threads", None, 90
+        session,
+        f("Open AI assistant", "open", NOW + timedelta(days=9)),
+        "hn_freelancer_threads",
+        None,
+        90,
     )
     formal = ingest_finding(
         session, f("Formal AI assistant", "open", NOW + timedelta(days=9)), "ted_api", None, 90

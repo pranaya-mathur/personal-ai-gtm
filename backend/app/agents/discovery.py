@@ -1,4 +1,5 @@
 import uuid
+
 from sqlalchemy.orm import Session
 from tenacity import (
     Retrying,
@@ -22,7 +23,7 @@ from app.core.logging import get_logger
 from app.services.ingest import ingest_finding, validate_finding
 from app.services.provider_runs import RunLedger
 from app.services.query_strategy import prefer_effective, record_search
-from app.services.spend import Reservation, SpendGuard, SpendLimitExceeded
+from app.services.spend import SpendGuard, SpendLimitExceeded
 
 log = get_logger(__name__)
 
@@ -62,7 +63,7 @@ class _DiscoveryAgent:
     def _feedback_in(self, connector: DiscoveryConnector) -> None:
         """Order a search connector's queries by what they measurably produced before."""
         if hasattr(connector, "set_plan") and hasattr(connector, "planned"):
-            connector.query_log = {}  # type: ignore[attr-defined]
+            connector.query_log = {}
             connector.set_plan(prefer_effective(self.session, connector.planned()))  # type: ignore[attr-defined]
 
     def _feedback_out(self, connector: DiscoveryConnector, cost: float) -> None:
@@ -75,7 +76,9 @@ class _DiscoveryAgent:
             record_search(
                 self.session,
                 provider=connector.name,
-                planned=PlannedQuery(e["channel"], e["text"], "executed", fp or fingerprint(e["text"])),
+                planned=PlannedQuery(
+                    e["channel"], e["text"], "executed", fp or fingerprint(e["text"])
+                ),
                 urls=e["urls"],
                 pages_ok=e["pages_ok"],
                 pages_blocked=e["pages_blocked"],
@@ -163,7 +166,9 @@ class _DiscoveryAgent:
                 continue
             except ConnectorError as exc:
                 errors.append(f"{connector.name}: {exc}")
-                stats.append({**_stat(connector, errors=1, status="failed"), "error": str(exc)[:300]})
+                stats.append(
+                    {**_stat(connector, errors=1, status="failed"), "error": str(exc)[:300]}
+                )
                 log.error("connector_failed", provider=connector.name, error=str(exc))
                 continue
             st = _stat(connector, status="succeeded", cost=result.actual_cost_usd)

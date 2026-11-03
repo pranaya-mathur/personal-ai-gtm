@@ -417,7 +417,8 @@ def assess(
         put(
             "active",
             "fail",
-            f"deadline {deadline:%Y-%m-%d} has passed" if deadline_passed and deadline
+            f"deadline {deadline:%Y-%m-%d} has passed"
+            if deadline_passed and deadline
             else f"source is {status}",
         )
     else:

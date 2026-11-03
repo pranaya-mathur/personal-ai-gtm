@@ -155,6 +155,9 @@ class RouteOut(BaseModel):
     role: str | None
     source_url: str
     snippet: str | None = None
+    route_class: str | None = None
+    authority: str | None = None
+    authority_note: str | None = None
 
 
 class BoardRow(BaseModel):

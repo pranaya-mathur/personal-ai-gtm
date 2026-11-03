@@ -26,6 +26,7 @@ class DiscoveryQuery(BaseModel):
     max_results: int = Field(default=25, ge=1, le=500)
     max_age_days: int = Field(default=90, ge=1)
     connector_names: list[str] | None = None  # restrict a run to specific providers
+    include_candidates: bool = True  # also run candidate discovery + partner-page verification
 
 
 class RawContact(BaseModel):

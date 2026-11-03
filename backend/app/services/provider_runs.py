@@ -36,7 +36,9 @@ class ProviderRunUncertain(ProviderRunPending):
         super().__init__(message, "")
 
 
-def idempotency_key(workflow_run_id: uuid.UUID | None, provider: str, actor: str, run_input: Any) -> str:
+def idempotency_key(
+    workflow_run_id: uuid.UUID | None, provider: str, actor: str, run_input: Any
+) -> str:
     blob = json.dumps(run_input, sort_keys=True, default=str)
     raw = f"{workflow_run_id or 'cli'}|{provider}|{actor}|{blob}"
     return hashlib.sha256(raw.encode()).hexdigest()[:48]
@@ -52,7 +54,9 @@ def charge_of(run: dict[str, Any]) -> dict[str, Any]:
     reported = run.get("usageTotalUsd")
     reported_f = float(reported) if isinstance(reported, int | float) else None
     events = run.get("chargedEventCounts") or {}
-    prices = ((run.get("pricingInfo") or {}).get("pricingPerEvent") or {}).get("actorChargeEvents") or {}
+    prices = ((run.get("pricingInfo") or {}).get("pricingPerEvent") or {}).get(
+        "actorChargeEvents"
+    ) or {}
     event_usd: float | None = None
     if isinstance(events, dict) and events and isinstance(prices, dict):
         total, complete = 0.0, True
@@ -111,7 +115,9 @@ class RunLedger:
         key = idempotency_key(self.workflow_run_id, self.provider, actor, run_input)
 
         def op(s: Session) -> tuple[uuid.UUID, str | None]:
-            row = s.execute(select(ProviderRun).where(ProviderRun.idempotency_key == key)).scalar_one_or_none()
+            row = s.execute(
+                select(ProviderRun).where(ProviderRun.idempotency_key == key)
+            ).scalar_one_or_none()
             if row is None:
                 row = ProviderRun(
                     provider=self.provider,
@@ -190,16 +196,26 @@ def apply_provider_record(
             row.finalized_at = utcnow()
         row.detail = {**(row.detail or {}), "provider_status": status}
 
-    (write or (lambda f: (f(session), session.flush())))(op)
+    if write is not None:
+        write(op)
+    else:
+        op(session)
+        session.flush()
     return c
 
 
 def settle_spend_from_runs(session: Session, spend_id: uuid.UUID) -> float | None:
     """When EVERY run under a reservation is final with a real charge, replace the reservation by
     the sum of those charges. Otherwise leave it untouched (never guess)."""
-    runs = list(session.execute(select(ProviderRun).where(ProviderRun.spend_id == spend_id)).scalars())
+    runs = list(
+        session.execute(select(ProviderRun).where(ProviderRun.spend_id == spend_id)).scalars()
+    )
     spend = session.get(ProviderSpend, spend_id)
-    if not runs or spend is None or any(r.status not in {"succeeded", "failed"} or r.charged_usd is None for r in runs):
+    if (
+        not runs
+        or spend is None
+        or any(r.status not in {"succeeded", "failed"} or r.charged_usd is None for r in runs)
+    ):
         return None
     total = round(sum(float(r.charged_usd or 0) for r in runs), 4)
     spend.amount_usd = total

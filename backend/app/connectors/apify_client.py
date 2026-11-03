@@ -55,7 +55,10 @@ class ApifyClient:
             data = self._json(self._http.get("/v2/users/me/usage/monthly"))["data"]
         except httpx.HTTPError as exc:
             raise ConnectorError(f"Apify transport error: {type(exc).__name__}") from exc
-        keep = ("totalUsageCreditsUsdBeforeVolumeDiscount", "totalUsageCreditsUsdAfterVolumeDiscount")
+        keep = (
+            "totalUsageCreditsUsdBeforeVolumeDiscount",
+            "totalUsageCreditsUsdAfterVolumeDiscount",
+        )
         out = {k: data[k] for k in keep if k in data}
         out["usageCycle"] = data.get("usageCycle")
         return out
@@ -90,7 +93,8 @@ class ApifyClient:
                     if ledger is not None and row_id is not None:
                         ledger.uncertain(row_id, f"submit transport error {type(exc).__name__}")
                     raise ProviderRunPending(
-                        f"Apify submit outcome unknown ({type(exc).__name__}); not re-submitting", ""
+                        f"Apify submit outcome unknown ({type(exc).__name__}); not re-submitting",
+                        "",
                     ) from exc
                 if 400 <= submit.status_code < 500:
                     if ledger is not None and row_id is not None:

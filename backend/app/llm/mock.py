@@ -46,6 +46,12 @@ class MockLLM:
             out = S.EvidenceEvaluation(
                 verdict="supported", reliability=0.7, issues=[], supporting=[claim]
             )
+        elif schema is S.ClaimJudgements:
+            # the offline judge is deliberately conservative: it never upgrades an ambiguous claim
+            idx = [int(i) for i in re.findall(r"^CLAIM (\d+):", user, re.M)]
+            out = S.ClaimJudgements(
+                results=[S.ClaimJudgement(index=i, supports=False) for i in idx]
+            )
         elif schema is S.ResearchBrief:
             out = S.ResearchBrief(
                 findings=[claim], open_questions=["Budget and timeline are not stated."]

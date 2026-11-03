@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai import schemas as S
-from app.ai.claims import validate_output
+from app.ai.claims import AMBIGUOUS, support_report, validate_output
 from app.ai.gateway import LLMGateway
 from app.ai.prompts import SYSTEM_BASE, EvidenceItem, build_user_prompt
 from app.llm.base import T
@@ -70,7 +70,58 @@ class AITasks:
         )
 
     def dossier(self, opp: Opportunity, run_id: uuid.UUID | None) -> S.OpportunityDossier | None:
-        return self._run("dossier", S.OpportunityDossier, opp, run_id, 1)
+        d = self._run("dossier", S.OpportunityDossier, opp, run_id, 1)
+        return self._downgrade_unsupported(d, opp, run_id) if d is not None else None
+
+    def _downgrade_unsupported(
+        self, d: S.OpportunityDossier, opp: Opportunity, run_id: uuid.UUID | None
+    ) -> S.OpportunityDossier:
+        """Claims whose quote only ambiguously backs them never keep their full weight: the
+        dossier is downgraded (explicit->implied, supported->partially_supported) and the
+        deterministic qualification never relies on them. An optional, separately authorised model
+        call may clear claims the deterministic check could not decide - ambiguous ones only."""
+        items = self.evidence_for(opp)
+        report = support_report(d, {e.id: e.text for e in items})
+        doubtful = [(c, why) for c, label, why in report if label == AMBIGUOUS]
+        if doubtful and self.gateway.settings.ai_semantic_check_enabled:
+            doubtful = self._judge(opp, run_id, doubtful, items)
+        if not doubtful:
+            return d
+        update: dict[str, object] = {}
+        support = d.ai_project_support
+        if d.ai_project == "explicit" and (
+            support is None or any(c.quote == support.quote for c, _ in doubtful)
+        ):
+            update["ai_project"] = "implied"
+        if d.verdict == "supported":
+            update["verdict"] = "partially_supported"
+        return d.model_copy(update=update) if update else d
+
+    def _judge(
+        self,
+        opp: Opportunity,
+        run_id: uuid.UUID | None,
+        doubtful: list[tuple[S.Claim, str]],
+        items: list[EvidenceItem],
+    ) -> list[tuple[S.Claim, str]]:
+        lines = [f"CLAIM {i}: {c.text}\nQUOTE {i}: {c.quote}" for i, (c, _) in enumerate(doubtful)]
+        wanted = {c.evidence_id for c, _ in doubtful}
+        res = self.gateway.run_task(
+            task="claim_support_check",
+            schema=S.ClaimJudgements,
+            system=SYSTEM_BASE,
+            user=build_user_prompt(
+                "claim_support_check", "\n".join(lines), [e for e in items if e.id in wanted]
+            ),
+            run_id=run_id,
+            opportunity_id=opp.id,
+            validator=lambda _o: None,
+            agent="research_evidence",
+        )
+        if res is None:
+            return doubtful  # no verdict: stay downgraded
+        cleared = {j.index for j in res.results if j.supports}
+        return [d for i, d in enumerate(doubtful) if i not in cleared]
 
     def analyze(self, opp: Opportunity, run_id: uuid.UUID | None) -> S.OpportunityAnalysis | None:
         return self._run("opportunity_analysis", S.OpportunityAnalysis, opp, run_id, 1)

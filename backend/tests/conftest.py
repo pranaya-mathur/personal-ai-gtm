@@ -29,7 +29,9 @@ def session() -> Iterator[Session]:
         yield s
 
 
-SANDBOX_MARKER = "gtm-test-sandbox"  # COMMENT ON DATABASE <db> IS 'gtm-test-sandbox' (explicit, by an operator)
+SANDBOX_MARKER = (
+    "gtm-test-sandbox"  # COMMENT ON DATABASE <db> IS 'gtm-test-sandbox' (explicit, by an operator)
+)
 
 
 def _identity(url: str) -> tuple[str, str, str]:
@@ -61,7 +63,10 @@ def assert_safe_test_db(url: str, *, probe: bool = False) -> None:
     host, port, db_name = _identity(url)
     if not db_name or "test" not in db_name:
         pytest.fail(f"Refusing to use {db_name!r} as a test database: name must contain 'test'.")
-    if db_name in {"gtm", "postgres", "template0", "template1"} or (host, port, db_name) in live_identities():
+    if (
+        db_name in {"gtm", "postgres", "template0", "template1"}
+        or (host, port, db_name) in live_identities()
+    ):
         pytest.fail(f"Refusing {db_name!r}: it is (or aliases) the application database.")
     if not probe:
         return
@@ -72,7 +77,9 @@ def assert_safe_test_db(url: str, *, probe: bool = False) -> None:
         with eng.connect() as c:
             current = c.execute(text("select current_database()")).scalar_one()
             comment = c.execute(
-                text("select shobj_description(oid, 'pg_database') from pg_database where datname = current_database()")
+                text(
+                    "select shobj_description(oid, 'pg_database') from pg_database where datname = current_database()"
+                )
             ).scalar_one_or_none()
     finally:
         eng.dispose()
@@ -115,7 +122,9 @@ def api(monkeypatch):  # type: ignore[no-untyped-def]
     )
     get_settings.cache_clear()
     reset_rate_limits()
-    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     app = create_app()

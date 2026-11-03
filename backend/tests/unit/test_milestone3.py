@@ -61,7 +61,9 @@ def test_genuine_ai_request_is_actionable_and_budget_is_explicitly_unknown() -> 
     )
     assert r.technical_relevance == "relevant" and r.triage == "actionable"
     assert r.criteria["budget"]["detail"].startswith("UNKNOWN")
-    assert any(m.startswith("budget: not stated") for m in r.missing)  # missing stays visible, never invented
+    assert any(
+        m.startswith("budget: not stated") for m in r.missing
+    )  # missing stays visible, never invented
 
 
 @pytest.mark.parametrize("status", ["closed", "awarded"])

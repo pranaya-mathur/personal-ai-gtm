@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.commercial import router as commercial_router
 from app.api.routes.core import public_router, router
+from app.api.routes.ops import router as ops_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 
@@ -24,6 +25,7 @@ def create_app() -> FastAPI:
     app.include_router(public_router)
     app.include_router(router)
     app.include_router(commercial_router)
+    app.include_router(ops_router)
     return app
 
 

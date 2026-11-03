@@ -38,7 +38,6 @@ from app.models.enums import (
 )
 from app.orchestrator.runner import enqueue_run
 from app.schemas.api import (
-    VerifyIn,
     AnalysisOut,
     BoardRow,
     BudgetLine,
@@ -59,6 +58,7 @@ from app.schemas.api import (
     RouteOut,
     RunCreate,
     RunOut,
+    VerifyIn,
 )
 from app.services.commercial_class import LABELS as COMMERCIAL_LABELS
 from app.services.commercial_class import commercial_class
@@ -74,6 +74,7 @@ from app.services.fit import pipeline_stage
 from app.services.intake import IntakeError, intake_lead
 from app.services.project_type import project_type as project_type_of
 from app.services.query_strategy import effectiveness_report
+from app.services.routes import route_authority, route_class
 from app.services.triage import ATTESTABLE, _parse_value, apply_assessment, assess_opportunity
 from app.utils import utcnow
 
@@ -386,7 +387,11 @@ def verify_opportunity(
     if attest and not (opp.assessment or {}).get("manual_reject"):
         attested = dict((opp.assessment or {}).get("attested") or {})
         for key in attest:
-            attested[key] = {"by": who.name, "at": utcnow().isoformat(), "note": body.note if body else None}
+            attested[key] = {
+                "by": who.name,
+                "at": utcnow().isoformat(),
+                "note": body.note if body else None,
+            }
         opp.assessment = {**(opp.assessment or {}), "attested": attested}
     previous = apply_assessment(opp, assess_opportunity(db, opp, get_settings()))
     db.add(
@@ -576,7 +581,18 @@ def board(
         ptype = project_type_of(text)
         routes = [
             RouteOut(
-                kind=r.kind, value=r.value, role=r.role, source_url=r.source_url, snippet=r.snippet
+                kind=r.kind,
+                value=r.value,
+                role=r.role,
+                source_url=r.source_url,
+                snippet=r.snippet,
+                route_class=route_class(r.kind, r.value, r.role),
+                authority=route_authority(
+                    route_class(r.kind, r.value, r.role), opp.channel == "direct_buyer"
+                )[0],
+                authority_note=route_authority(
+                    route_class(r.kind, r.value, r.role), opp.channel == "direct_buyer"
+                )[1],
             )
             for r in db.execute(
                 select(ContactRoute).where(ContactRoute.opportunity_id == opp.id)
@@ -680,6 +696,9 @@ def contact_routes(db: Session = Depends(get_db)) -> list[dict[str, object]]:
                 "kind": r.kind,
                 "value": r.value,
                 "role": r.role,
+                "route_class": (rc := route_class(r.kind, r.value, r.role)),
+                "authority": route_authority(rc, opp.channel == "direct_buyer")[0],
+                "authority_note": route_authority(rc, opp.channel == "direct_buyer")[1],
                 "source_url": r.source_url,
                 "opportunity_id": str(opp.id),
                 "opportunity": opp.title,

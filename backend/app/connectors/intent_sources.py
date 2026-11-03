@@ -30,8 +30,8 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 from app.models.enums import SourceCheckStatus
 from app.services.intent import classify_intent, is_editorial, is_excluded_source, page_date
-from app.services.provider_runs import charge_of
 from app.services.partnership import page_title, visible_text
+from app.services.provider_runs import charge_of
 from app.services.routes import routes_from_html
 from app.services.source_check import USER_AGENT, SourceChecker
 from app.services.triage import find_terms
@@ -194,7 +194,9 @@ class SearchIntentConnector:
     def discover(self, query: DiscoveryQuery) -> DiscoveryResult:
         key = self.settings.brave_api_key
         if not self.settings.search_discovery_enabled or key is None:
-            raise ConnectorDisabled("intent search is off (SEARCH_DISCOVERY_ENABLED / BRAVE_API_KEY)")
+            raise ConnectorDisabled(
+                "intent search is off (SEARCH_DISCOVERY_ENABLED / BRAVE_API_KEY)"
+            )
         checker = self._checker or SourceChecker()
         findings: list[RawFinding] = []
         seen: set[tuple[str, str]] = set()
@@ -234,10 +236,16 @@ class SearchIntentConnector:
                             continue
                         pages += 1
                         fetched[url] = checker.fetch_page(url)
-                        qlog["pages_ok" if fetched[url][0] is SourceCheckStatus.CONFIRMED else "pages_blocked"] += 1
+                        qlog[
+                            "pages_ok"
+                            if fetched[url][0] is SourceCheckStatus.CONFIRMED
+                            else "pages_blocked"
+                        ] += 1
                     f = self._read(fetched[url], url, channel, r.get("title"))
                     if f is not None:
-                        findings.append(f.model_copy(update={"query_fingerprint": planned.fingerprint}))
+                        findings.append(
+                            f.model_copy(update={"query_fingerprint": planned.fingerprint})
+                        )
         return DiscoveryResult(
             provider=self.name,
             findings=findings[: query.max_results],
@@ -381,7 +389,11 @@ class ApifySearchIntentConnector(SearchIntentConnector):
 
                 term = (item.get("searchQuery") or {}).get("term")
                 fp = _fp(term) if term else None
-                qlog = self._log(fp, channel, term) if fp else {"urls": 0, "pages_ok": 0, "pages_blocked": 0}
+                qlog = (
+                    self._log(fp, channel, term or "")
+                    if fp
+                    else {"urls": 0, "pages_ok": 0, "pages_blocked": 0}
+                )
                 for r in item.get("organicResults") or []:
                     url = r.get("url") or ""
                     if not url or (channel, url) in seen or is_excluded_source(url):
@@ -393,7 +405,11 @@ class ApifySearchIntentConnector(SearchIntentConnector):
                             continue
                         pages += 1
                         fetched[url] = checker.fetch_page(url)
-                        qlog["pages_ok" if fetched[url][0] is SourceCheckStatus.CONFIRMED else "pages_blocked"] += 1
+                        qlog[
+                            "pages_ok"
+                            if fetched[url][0] is SourceCheckStatus.CONFIRMED
+                            else "pages_blocked"
+                        ] += 1
                     f = self._read(fetched[url], url, channel, r.get("title"))
                     if f is not None:
                         findings.append(f.model_copy(update={"query_fingerprint": fp}))

@@ -20,15 +20,20 @@ from app.agents.research import ResearchEvidenceAgent
 from app.ai.gateway import LLMGateway
 from app.ai.tasks import AITasks
 from app.connectors.agencies import PartnerPageChecker
-from app.connectors.base import ConnectorDisabled, ConnectorError, DiscoveryConnector, DiscoveryQuery
+from app.connectors.base import (
+    ConnectorDisabled,
+    ConnectorError,
+    DiscoveryConnector,
+    DiscoveryQuery,
+)
 from app.connectors.discoverers import build_discoverers
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.llm import LLMClient, build_llm
 from app.models import Opportunity
 from app.services.candidates import known_count, next_batch, upsert_candidate
-from app.services.ingest import ingest_finding
 from app.services.commercial_class import commercial_class
+from app.services.ingest import ingest_finding
 from app.services.query_strategy import record_outcome
 from app.services.source_check import SourceChecker
 from app.services.source_verification import verify_sources
@@ -123,12 +128,20 @@ def build_graph(
         """Find NEW candidate organizations (free, permitted sources). No evidence is created."""
         query = DiscoveryQuery(**state["query"])
         stats: list[dict[str, Any]] = []
+        if not query.include_candidates:
+            return {"source_discovery": stats}
         for d in build_discoverers(settings):
             try:
                 found = d.discover(query, known_count(session, d.name))
             except ConnectorDisabled as exc:
                 stats.append(
-                    {"source": d.name, "found": 0, "new": 0, "error": None, "skipped": str(exc)[:200]}
+                    {
+                        "source": d.name,
+                        "found": 0,
+                        "new": 0,
+                        "error": None,
+                        "skipped": str(exc)[:200],
+                    }
                 )
                 continue
             except ConnectorError as exc:
@@ -145,6 +158,8 @@ def build_graph(
         query = DiscoveryQuery(**state["query"])
         ids = set(state.get("opportunity_ids", []))
         counts = {"checked": 0, "signal": 0, "no_signal": 0, "blocked": 0, "error": 0}
+        if not query.include_candidates:
+            return {"opportunity_ids": sorted(ids), "candidate_stats": counts}
         for cand in next_batch(session, settings.candidates_per_run):
             status, detail, findings = pages.check(
                 cand.domain, cand.page_url, cand.name, cand.country

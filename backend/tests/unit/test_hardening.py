@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from app.connectors.base import RawFinding, SignalKind
 from app.core.config import Settings
 from app.models import Opportunity
-from app.services.ingest import ingest_finding
 from app.services.intake import intake_lead
 from app.services.triage import apply_assessment, assess, assess_opportunity
 
@@ -225,7 +224,9 @@ def test_worker_that_lost_its_lease_writes_nothing(session) -> None:  # type: ig
 
     out = execute_run(session, run.id, [Thief("t")], s)
     assert stolen["done"] and out.lease_owner == "w2" and out.status == "running"
-    assert "opportunity_intelligence" not in out.state.get("completed_nodes", [])  # nothing after the takeover
+    assert "opportunity_intelligence" not in out.state.get(
+        "completed_nodes", []
+    )  # nothing after the takeover
 
 
 # ---------------------------------------------------------------- Finding B (durable provider runs)
@@ -262,7 +263,9 @@ def test_multiple_actor_runs_keep_every_provider_run_id(session) -> None:  # typ
         return httpx.Response(200, json=[])
 
     s, c = _apify(session, handler, apify_search_engines="google,bing")
-    out = OpportunityIntelligenceAgent(session, [c], SpendGuard(session, s)).run(DiscoveryQuery(), None)
+    out = OpportunityIntelligenceAgent(session, [c], SpendGuard(session, s)).run(
+        DiscoveryQuery(), None
+    )
     rows = list(session.execute(select(ProviderRun)).scalars())
     assert n["i"] >= 3 and len(rows) == n["i"]
     assert {r.external_id for r in rows} == {f"RUN{i}" for i in range(1, n["i"] + 1)}
@@ -287,7 +290,9 @@ def test_uncertain_submission_is_never_resubmitted(session) -> None:  # type: ig
     session.flush()
     agent = OpportunityIntelligenceAgent(session, [c], SpendGuard(session, s))
     first = agent.run(DiscoveryQuery(), wf)
-    assert posts["n"] == len(list(session.execute(select(ProviderRun)).scalars()))  # 1 per planned run
+    assert posts["n"] == len(
+        list(session.execute(select(ProviderRun)).scalars())
+    )  # 1 per planned run
     assert first["errors"] and "unknown" in first["errors"][0].lower()
     before = posts["n"]
     agent2 = OpportunityIntelligenceAgent(session, [c], SpendGuard(session, s))
@@ -368,7 +373,7 @@ from app.services.query_strategy import build_plan, fingerprint, prefer_effectiv
 from tests.unit.test_milestone4 import _fake_checker  # noqa: E402
 
 GOOD_PAGE = (
-    '<html><head><title>Support project</title>'
+    "<html><head><title>Support project</title>"
     f'<meta property="article:published_time" content="{NOW:%Y-%m-%d}"></head><body><p>We are '
     "looking for a contractor to build a generative AI assistant for our support team. Remote "
     "delivery. Apply to jobs@buyer-a.example by 2026-12-30.</p></body></html>"
@@ -385,7 +390,11 @@ def _search_conn(good_query: str):  # type: ignore[no-untyped-def]
 
     def handler(req: httpx.Request) -> httpx.Response:
         q = req.url.params["q"]
-        url = "https://buyer-a.example/ai-job" if q == good_query else f"https://noise.example/{abs(hash(q)) % 999}"
+        url = (
+            "https://buyer-a.example/ai-job"
+            if q == good_query
+            else f"https://noise.example/{abs(hash(q)) % 999}"
+        )
         return httpx.Response(200, json={"web": {"results": [{"url": url, "title": q}]}})
 
     pages = {"https://buyer-a.example/ai-job": (200, GOOD_PAGE)}
@@ -433,3 +442,171 @@ def test_query_outcomes_are_persisted_attributed_and_change_future_ordering(sess
     new_order = [p.text for p in prefer_effective(session, build_plan(s))]
     assert new_order[0] == good and new_order != first_order or first_order[0] == good
     assert fingerprint(good) in {r.fingerprint for r in rows.values()}
+
+
+# ---------------------------------------------------------------- Finding H (semantic claim support)
+from app.ai import schemas as AS  # noqa: E402
+from app.ai.claims import ClaimValidationError, claim_support, validate_output  # noqa: E402
+
+EV = {"e1": "We are looking for a contractor to build a RAG assistant. Budget up to 4,000 EUR. "
+      "Remote work may be possible. Applications are not accepted after 30 June."}  # fmt: skip
+
+
+def _claim(text: str, quote: str) -> AS.Claim:
+    return AS.Claim(text=text, evidence_id="e1", quote=quote)
+
+
+def test_quote_that_exists_but_does_not_back_the_claim_is_unsupported() -> None:
+    q = "Budget up to 4,000 EUR"
+    assert claim_support("The budget is 40,000 EUR", q)[0] == "unsupported"
+    assert (
+        claim_support("The buyer requires on-site delivery in Berlin", "build a RAG assistant")[0]
+        == "unsupported"
+    )
+    assert claim_support("Budget up to 4,000 EUR", q)[0] == "supported"
+    assert claim_support("Budget is capped at 4,000 EUR", q)[0] == "supported"  # honest paraphrase
+
+
+def test_reversed_polarity_or_stronger_obligation_is_ambiguous_not_accepted_silently() -> None:
+    assert claim_support("Remote work is required", "Remote work may be possible")[0] == "ambiguous"
+    assert (
+        claim_support(
+            "Applications are accepted after 30 June", "Applications are not accepted after 30 June"
+        )[0]
+        == "ambiguous"
+    )
+
+
+def test_validate_output_rejects_unsupported_and_returns_review_notes() -> None:
+    bad = AS.OpportunityAnalysis(
+        summary="s", claims=[_claim("The budget is 40,000 EUR", "Budget up to 4,000 EUR")]
+    )
+    try:
+        validate_output(bad, EV, 1)
+        raise AssertionError("expected rejection")
+    except ClaimValidationError as e:
+        assert "does not support" in str(e)
+    amb = AS.OpportunityAnalysis(
+        summary="s", claims=[_claim("Remote work is required", "Remote work may be possible")]
+    )
+    notes = validate_output(amb, EV, 1)
+    assert notes and "obligation" in notes[0]
+
+
+def test_ambiguous_ai_project_support_is_downgraded_and_judge_is_off_by_default(session) -> None:  # type: ignore[no-untyped-def]
+    from app.ai.tasks import AITasks
+
+    ev = "We need remote work, which may be possible, for our AI chatbot project."
+    claim = _claim(
+        "Remote work is required for the AI project", "remote work, which may be possible"
+    )
+    d = AS.OpportunityDossier(
+        summary="s", requirements=[claim], budget=None, deadline=None, ai_project="explicit",
+        ai_project_support=claim, verdict="supported", reliability=0.7, findings=[claim],
+        open_questions=[], fit_score=70.0, risks=[], external_delivery="unclear",
+        small_team_fit="unclear", suggested_next_action="read",
+    )  # fmt: skip
+
+    class GW:
+        settings = Settings(database_url="sqlite://")
+
+    t = AITasks.__new__(AITasks)
+    t.gateway = GW()  # type: ignore[assignment]
+    t.evidence_for = lambda opp: [
+        __import__("app.ai.prompts", fromlist=["EvidenceItem"]).EvidenceItem("e1", "u", ev)
+    ]  # type: ignore[method-assign]
+    out = t._downgrade_unsupported(d, None, None)  # type: ignore[arg-type]
+    assert out.ai_project == "implied" and out.verdict == "partially_supported"
+
+
+# ---------------------------------------------------------------- scheduled operation
+from app.models import SourceSchedule  # noqa: E402
+from app.services.scheduler import (  # noqa: E402
+    due_sources,
+    ensure_schedules,
+    freshness,
+    record_run_results,
+    schedule_tick,
+)
+
+
+def _sched_settings(**kw):  # type: ignore[no-untyped-def]
+    return Settings(
+        database_url="sqlite://", scheduler_enabled=True,
+        enabled_connectors="ted_api,canadabuys,apify_intent_search,intent_search,hn_hiring_triggers",
+        **kw,
+    )  # fmt: skip
+
+
+def test_paid_sources_are_seeded_disabled_and_never_scheduled(session) -> None:  # type: ignore[no-untyped-def]
+    s = _sched_settings()
+    rows = {r.connector: r for r in ensure_schedules(session, s)}
+    assert rows["apify_intent_search"].paid and not rows["apify_intent_search"].enabled
+    rows["apify_intent_search"].enabled = True  # even if someone flips the row...
+    session.flush()
+    run = schedule_tick(session, s)
+    assert run is not None
+    assert (
+        "apify_intent_search" not in run.input["query"]["connector_names"]
+    )  # ...global flag blocks
+    assert {"ted_api", "canadabuys"} <= set(run.input["query"]["connector_names"])
+    assert run.trigger == "scheduled"
+
+
+def test_scheduler_is_off_by_default_and_prevents_overlap(session) -> None:  # type: ignore[no-untyped-def]
+    off = Settings(database_url="sqlite://", enabled_connectors="ted_api")
+    assert schedule_tick(session, off) is None
+    s = _sched_settings()
+    first = schedule_tick(session, s)
+    assert first is not None
+    for r in session.execute(select(SourceSchedule)).scalars():
+        r.next_run_at = datetime.now(UTC) - timedelta(hours=1)  # everything due again
+        r.last_attempt_at = None
+    session.flush()
+    assert schedule_tick(session, s) is None  # the first scheduled run is still queued
+
+
+def test_rate_limit_and_failure_backoff_and_freshness(session) -> None:  # type: ignore[no-untyped-def]
+    s = _sched_settings()
+    first = schedule_tick(session, s)
+    row = session.execute(
+        select(SourceSchedule).where(SourceSchedule.connector == "ted_api")
+    ).scalar_one()
+    row.next_run_at = datetime.now(UTC) - timedelta(minutes=1)  # due, but attempted just now
+    session.flush()
+    assert "ted_api" not in [d.connector for d in due_sources(session, s)]  # min_gap rate limit
+    first.status = "failed"
+    first.state = {
+        "outcome": {"per_source": {"ted_api": {"status": "failed", "error": "HTTP 503"}}}
+    }
+    record_run_results(session, first)
+    session.refresh(row)
+    assert row.consecutive_failures == 1 and row.last_error == "HTTP 503"
+    assert row.next_run_at is not None and freshness(row) in ("never_succeeded", "failing")
+    first2 = first
+    first2.state = {
+        "outcome": {
+            "per_source": {"ted_api": {"status": "succeeded", "retrieved": 5, "created": 2}}
+        }
+    }
+    record_run_results(session, first2)
+    session.refresh(row)
+    assert row.consecutive_failures == 0 and row.last_new == 2 and freshness(row) == "ok"
+
+
+# ---------------------------------------------------------------- contact intelligence
+from app.services.routes import route_authority, route_class  # noqa: E402
+
+
+def test_published_addresses_are_classified_and_never_assumed_to_be_decision_makers() -> None:
+    assert route_class("email", "careers@acme.example", None) == "recruitment"
+    assert route_authority("recruitment", True)[0] == "wrong_route"
+    assert route_class("email", "tenders@city.example", None) == "procurement"
+    assert route_authority("procurement", True)[0] == "notice_contact"
+    assert route_class("email", "info@acme.example", None) == "generic_inquiry"
+    assert route_authority("generic_inquiry", False)[0] == "unconfirmed"
+    assert route_class("email", "partners@agency.example", None) == "partnership"
+    assert route_class("email", "j.doe@acme.example", "Head of Data") == "technical"
+    assert route_class("email", "j.doe@acme.example", None) == "named_person"
+    assert route_authority("named_person", False)[0] == "unconfirmed"
+    assert route_class("inquiry_form", "https://acme.example/contact", None) == "inquiry_form"

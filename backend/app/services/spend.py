@@ -153,9 +153,12 @@ class SpendGuard:
         """Replace the estimate with the provider-reported/computed actual. Never called for
         failed or unmetered calls: those keep the full estimate (conservative)."""
         amount = _round_up(actual_usd)
-        current = self.session.execute(
-            select(ProviderSpend.description).where(ProviderSpend.id == reservation.id)
-        ).scalar_one_or_none() or ""
+        current = (
+            self.session.execute(
+                select(ProviderSpend.description).where(ProviderSpend.id == reservation.id)
+            ).scalar_one_or_none()
+            or ""
+        )
         notes = current.partition(";")[2]  # keep the provider run ids recorded during the call
         stmt = (
             update(ProviderSpend)

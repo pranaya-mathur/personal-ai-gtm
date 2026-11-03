@@ -123,7 +123,7 @@ class _Heartbeat:
         while not self._stop.wait(self.settings.run_heartbeat_seconds):
             try:
                 with Session(self.bind) as s:
-                    n = s.execute(
+                    res = s.execute(
                         update(WorkflowRun)
                         .where(
                             WorkflowRun.id == self.run_id,
@@ -134,9 +134,9 @@ class _Heartbeat:
                             lease_expires_at=utcnow()
                             + timedelta(seconds=self.settings.run_lease_seconds)
                         )
-                    ).rowcount
+                    )
                     s.commit()
-                if n == 0:
+                if res.rowcount == 0:  # type: ignore[attr-defined]
                     self.lost.set()
                     return
             except Exception as exc:  # a transient DB error must not kill the run; lease retries

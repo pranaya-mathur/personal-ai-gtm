@@ -64,6 +64,15 @@ class OutreachDraftAI(_Strict):
     claims: list[Claim]  # every factual statement about the recipient/opportunity in `body`
 
 
+class ClaimJudgement(_Strict):
+    index: int
+    supports: bool  # does the quote, read in context, genuinely establish the claim?
+
+
+class ClaimJudgements(_Strict):
+    results: list[ClaimJudgement]
+
+
 class OpportunityDossier(_Strict):
     """One call that replaces analysis + extraction + evidence evaluation + research + fit
     assessment, so later agents reuse it instead of re-reading the same source."""

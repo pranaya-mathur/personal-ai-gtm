@@ -35,9 +35,9 @@ def summarize(state: dict[str, Any]) -> dict[str, Any]:
         for k in ("retrieved", "created", "duplicates"):
             cur[k] = max(cur[k], int(s.get(k, 0)))
     for d in state.get("source_discovery") or []:
-        failed = bool(d.get("error"))
+        d_failed = bool(d.get("error"))
         sources[f"discoverer:{d['source']}"] = {
-            "status": "skipped" if d.get("skipped") else ("failed" if failed else "succeeded"),
+            "status": "skipped" if d.get("skipped") else ("failed" if d_failed else "succeeded"),
             "retrieved": int(d.get("found", 0)),
             "created": int(d.get("new", 0)),
             "duplicates": 0,

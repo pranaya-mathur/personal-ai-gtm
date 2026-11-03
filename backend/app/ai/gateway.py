@@ -19,7 +19,7 @@ from app.models import AiAnalysis, LlmUsage
 from app.services.spend import SpendGuard, SpendLimitExceeded
 
 log = get_logger(__name__)
-Validator = Callable[[BaseModel], None]
+Validator = Callable[[BaseModel], list[str] | None]
 
 
 class RecordBudgetExceeded(SpendLimitExceeded):
@@ -162,8 +162,9 @@ class LLMGateway:
             cost = self.cost_usd(result.input_tokens, result.output_tokens)
             if reservation is not None:
                 self.spend.settle(reservation, cost)
+            review: list[str] = []
             try:
-                validator(result.parsed)
+                review = validator(result.parsed) or []
             except ClaimValidationError as exc:
                 last_reason = str(exc)
                 self._ledger(
@@ -182,7 +183,9 @@ class LLMGateway:
                 run_id,
                 result.parsed,
                 True,
-                None,
+                f"review: {len(review)} ambiguous claim(s): " + " | ".join(review)[:400]
+                if review
+                else None,
                 result.provider,
                 result.model,
                 h,

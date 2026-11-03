@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     samgov_api_key: SecretStr | None = None
 
     enabled_connectors: str = "mock_opportunities,mock_agencies"
+    # Scheduled discovery. Free sources only: paid providers are never scheduled unless this flag
+    # is ON *and* the operator enabled that paid schedule *and* the provider's own approval flag
+    # and budget are set. Off by default.
+    scheduler_enabled: bool = False
+    scheduler_allow_paid: bool = False
 
     spend_limit_per_run_usd: float = 1.00
     spend_limit_daily_usd: float = 5.00
@@ -83,6 +88,8 @@ class Settings(BaseSettings):
     ai_max_calls_per_record: int = 3  # per run: 1 dossier + 1 repair + 1 draft
     ai_task_budget_usd: float = 0.25  # per task per run
     ai_max_repair_attempts: int = 1
+    # Optional extra model call that judges ONLY claims the deterministic check found ambiguous.
+    ai_semantic_check_enabled: bool = False
     ai_task_max_output_tokens: str = "dossier=2500,outreach_draft=900"
     llm_retry_base_seconds: float = 0.5
     llm_spend_limit_per_run_usd: float = 0.50
