@@ -1,0 +1,62 @@
+{
+  "head" : {
+    "vars" : [ "item", "itemLabel", "site", "countryCode" ]
+  },
+  "results" : {
+    "bindings" : [ {
+      "item" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q5418295"
+      },
+      "site" : {
+        "type" : "uri",
+        "value" : "http://evi.com"
+      },
+      "itemLabel" : {
+        "xml:lang" : "en",
+        "type" : "literal",
+        "value" : "Evi"
+      },
+      "countryCode" : {
+        "type" : "literal",
+        "value" : "GB"
+      }
+    }, {
+      "item" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q5427418"
+      },
+      "site" : {
+        "type" : "uri",
+        "value" : "http://www.fxpansion.com"
+      },
+      "itemLabel" : {
+        "xml:lang" : "en",
+        "type" : "literal",
+        "value" : "FXpansion"
+      },
+      "countryCode" : {
+        "type" : "literal",
+        "value" : "GB"
+      }
+    }, {
+      "item" : {
+        "type" : "uri",
+        "value" : "http://www.wikidata.org/entity/Q5458947"
+      },
+      "site" : {
+        "type" : "uri",
+        "value" : "https://www.flexiant.com/"
+      },
+      "itemLabel" : {
+        "xml:lang" : "en",
+        "type" : "literal",
+        "value" : "Flexiant Limited"
+      },
+      "countryCode" : {
+        "type" : "literal",
+        "value" : "GB"
+      }
+    } ]
+  }
+}

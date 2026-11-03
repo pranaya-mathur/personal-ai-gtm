@@ -89,14 +89,25 @@ def _ted_map(item: dict[str, Any], q: DiscoveryQuery) -> RawFinding | None:
     if not title or not url:
         return None  # no original source => not usable evidence
     # Real output uses 'cn-standard' / 'can-standard' (the schema's 'cn' filter value matched
-    # nothing on 2026-11-03), so open calls are selected here: contract notices and PIN-as-CFC.
+    # nothing on 2026-11-03). Non-open notices are KEPT, flagged, and rejected explicitly later.
     ntype = _s(item, "noticeType") or ""
-    if not (ntype.startswith("cn") or ntype.startswith("pin-cfc")):
-        return None  # awards, corrigenda, etc. are not open demand
     deadline = parse_date(item.get("deadlineDate"))
-    if deadline is not None and deadline < datetime.now(UTC):
-        return None  # tender already closed
+    if ntype.startswith("can"):
+        status = "awarded"
+    elif not (ntype.startswith("cn") or ntype.startswith("pin-cfc")):
+        return None  # corrigenda, PINs without a call, etc. carry no demand signal
+    elif deadline is not None and deadline < datetime.now(UTC):
+        status = "closed"
+    else:
+        status = "open" if deadline is not None else "unknown"
     description = _s(item, "description")
+    value, currency = item.get("totalValue"), _s(item, "totalValueCurrency")
+    budget = (
+        f"{value} {currency or ''}".strip()
+        if isinstance(value, int | float | str) and value
+        else None
+    )
+    email, buyer_url = _s(item, "buyerEmail"), _s(item, "buyerUrl")
     return RawFinding(
         kind=SignalKind.PROJECT_REQUEST,
         title=title,
@@ -106,6 +117,10 @@ def _ted_map(item: dict[str, Any], q: DiscoveryQuery) -> RawFinding | None:
         organization_name=_s(item, "buyerName"),
         organization_country=_s(item, "buyerCountry"),
         provider_confidence=0.7,  # official notice: stated need, but not yet source-checked
+        source_status=status,
+        deadline=deadline,
+        budget_text=budget,
+        contact_route=email or buyer_url,
     )
 
 
@@ -131,8 +146,7 @@ def _wb_map(item: dict[str, Any], q: DiscoveryQuery) -> RawFinding | None:
     if not name or not url:
         return None
     deadline = parse_date(item.get("submissionDeadlineDate"))
-    if deadline is not None and deadline < datetime.now(UTC):
-        return None  # submission window already closed
+    status = "unknown" if deadline is None else "closed" if deadline < datetime.now(UTC) else "open"
     desc = _s(item, "bidDescription")
     contacts: list[RawContact] = []
     cname, cemail = _s(item, "contactName"), _s(item, "contactEmail")
@@ -148,6 +162,9 @@ def _wb_map(item: dict[str, Any], q: DiscoveryQuery) -> RawFinding | None:
         organization_country=_s(item, "country"),
         contacts=contacts,
         provider_confidence=0.7,
+        source_status=status,
+        deadline=deadline,
+        contact_route=cemail if contacts else None,
     )
 
 

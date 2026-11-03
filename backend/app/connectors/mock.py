@@ -39,6 +39,9 @@ class MockOpportunityConnector:
                 organization_domain="mock-buyer-one.example",
                 organization_country="DE",
                 provider_confidence=0.8,
+                source_status="open",
+                deadline=_days_ago(-30),
+                contact_route="https://mock-buyer-one.example/contact",
             ),
             RawFinding(
                 kind=SignalKind.PROJECT_REQUEST,
@@ -49,6 +52,7 @@ class MockOpportunityConnector:
                 organization_name="Mock Buyer Two",
                 organization_domain="mock-buyer-two.example",
                 provider_confidence=0.7,
+                source_status="closed",
             ),
             RawFinding(
                 kind=SignalKind.COMPANY_SIGNAL,

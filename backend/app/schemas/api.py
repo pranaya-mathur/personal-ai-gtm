@@ -147,6 +147,18 @@ class BoardRow(BaseModel):
     ai_summary: str | None
     next_action: str
     last_seen_at: datetime
+    triage: str
+    technical_relevance: str
+    rejection_reason: str | None
+    source_status: str
+    deadline: datetime | None
+    contact_route: str | None
+    missing: list[str]
+    reasons: list[str]
+    stage_a: dict[str, Any]
+    stage_b: dict[str, Any]
+    view: str  # which dashboard list this record belongs to
+    evidence_excerpt: str | None
 
 
 class BudgetLine(BaseModel):

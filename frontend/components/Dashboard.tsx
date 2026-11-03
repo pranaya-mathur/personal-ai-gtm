@@ -2,21 +2,23 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  api, CATEGORY_LABEL, splitReal, groupByCategory,
-  runProgress, type AiStatus, type AiUsage, type Category, type Connector, type Draft, type Evidence, type Metrics,
-  type BoardRow, type CostSummary, type Opportunity, type Profile, type Run,
+  api, splitReal, groupByCategory,
+  runProgress, type AiStatus, type AiUsage, type Connector, type Draft, type Evidence, type Metrics,
+  type BoardRow, type CostSummary, type Profile, type Run,
 } from "@/lib/api";
-import { CostPanel, OperationsView, OpportunityView, PartnershipView, ResearchDetail } from "./Views";
+import { CostPanel, OperationsView, RecordsView, ResearchDetail } from "./Views";
 
-type Tab = "overview" | "opportunities" | "partnerships" | "operations" | "research";
+type Tab = "overview" | "active" | "verify" | "partnerships" | "potential" | "rejected" | "operations" | "research";
 const TABS: [Tab, string][] = [
-  ["overview", "Overview"], ["opportunities", "Opportunities"], ["partnerships", "Partnerships"],
+  ["overview", "Overview"], ["active", "Confirmed active AI projects"],
+  ["verify", "Relevant, needs verification"], ["partnerships", "Verified partnerships"],
+  ["potential", "Potential agency partners"], ["rejected", "Rejected / off-topic"],
   ["operations", "Discovery operations"], ["research", "Research detail"],
 ];
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [opps, setOpps] = useState<Opportunity[]>([]);
+  const [opps, setOpps] = useState<{ id: string }[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
@@ -53,13 +55,13 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [load]);
 
-  const grouped = groupByCategory(splitReal(board).real);
   const open = (id: string) => { setSelected(id); setTab("research"); };
   const { real } = splitReal(board);
   const realCount = real.length;
-  const confirmed = real.filter((r) => r.category === "confirmed_demand" && r.verification_status === "verified").length;
-  const partners = real.filter((r) => r.category === "verified_partnership" && r.status === "qualified").length;
-  const pending = splitReal(board).real.filter((r) => r.status === "new" && r.verification_status === "unverified").length;
+  const count = (v: BoardRow["view"]) => real.filter((r) => r.view === v).length;
+  const confirmed = count("active_project");
+  const partners = count("verified_partnership");
+  const pending = count("needs_verification");
 
   return (
     <main>
@@ -88,8 +90,21 @@ export default function Dashboard() {
         ))}
       </nav>
 
-      {tab === "opportunities" && <OpportunityView rows={board} onOpen={open} />}
-      {tab === "partnerships" && <PartnershipView rows={board} onOpen={open} />}
+      {tab === "active" && <RecordsView rows={board} view="active_project" onOpen={open}
+        title="Confirmed active AI projects"
+        blurb="Open, relevant external requirements with a buyer contact route. Eligibility items may still be unverified; nothing here is human-verified until you verify it." />}
+      {tab === "verify" && <RecordsView rows={board} view="needs_verification" onOpen={open}
+        title="Technically relevant, requiring verification"
+        blurb="Plausibly AI-related, but something is unconfirmed (open status, scope, contact route). Not counted as active projects." />}
+      {tab === "partnerships" && <RecordsView rows={board} view="verified_partnership" onOpen={open}
+        title="Verified delivery partnerships"
+        blurb="Sources evidencing a subcontracting / white-label / partner delivery model. No current project is implied." />}
+      {tab === "potential" && <RecordsView rows={board} view="potential_partner" onOpen={open}
+        title="Potential agency partners"
+        blurb="Agencies that exist and offer complementary services. No evidence of demand or external delivery: do not assume a need." />}
+      {tab === "rejected" && <RecordsView rows={board} view="rejected" onOpen={open}
+        title="Rejected / off-topic"
+        blurb="Kept for audit with the reason (not relevant, closed, awarded). Evidence is preserved." />}
       {tab === "operations" && (
         <OperationsView runs={runs} onCancel={async (id) => { await api.cancelRun(id); await load(); }} />
       )}
@@ -98,9 +113,9 @@ export default function Dashboard() {
       {tab === "overview" && <>
       <section className="grid stats">
         <div className="card stat"><span className="muted">Real opportunities</span><b>{realCount}</b></div>
-        <div className="card stat"><span className="muted">Verified active requirements</span><b>{confirmed}</b></div>
-        <div className="card stat"><span className="muted">Qualified partnership prospects</span><b>{partners}</b></div>
-        <div className="card stat"><span className="muted">Pending research</span><b>{pending}</b></div>
+        <div className="card stat"><span className="muted">Confirmed active AI projects</span><b>{confirmed}</b></div>
+        <div className="card stat"><span className="muted">Verified delivery partnerships</span><b>{partners}</b></div>
+        <div className="card stat"><span className="muted">Relevant, needs verification</span><b>{pending}</b></div>
       </section>
       <section className="grid cols3"><CostPanel costs={costs} /></section>
       {board.length > 0 && realCount === 0 && (
@@ -123,23 +138,16 @@ export default function Dashboard() {
         </section>
       )}
 
-      <section className="grid cols3">
-        {(Object.keys(CATEGORY_LABEL) as Category[]).map((c) => (
-          <div className="card" key={c}>
-            <h2>{CATEGORY_LABEL[c]} ({grouped[c].length})</h2>
-            {grouped[c].length === 0 && <span className="muted">No real records yet</span>}
-            {grouped[c].map((o) => (
-              <div className="item" key={o.id}>
-                {o.title}
-                <div>
-                  <span className="badge">{o.status}</span>
-                  <span className="badge">{o.verification_status}</span>
-                  <span className="muted">conf {(o.confidence * 100).toFixed(0)}%</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        ))}
+      <section className="card">
+        <h2>Where records stand (real records only)</h2>
+        <ul>
+          <li>Confirmed active AI projects: {count("active_project")}</li>
+          <li>Relevant, needs verification: {count("needs_verification")}</li>
+          <li>Verified delivery partnerships: {count("verified_partnership")}</li>
+          <li>Potential agency partners: {count("potential_partner")}</li>
+          <li>Rejected / off-topic: {count("rejected")}</li>
+          <li>Unqualified signals (not projects): {count("unqualified_signal")}</li>
+        </ul>
       </section>
 
       <section className="grid cols3">
@@ -172,13 +180,19 @@ export default function Dashboard() {
             <span className="badge">{aiStatus?.would_make_paid_calls ? "PAID CALLS ACTIVE" : "no paid calls"}</span>
           </div>
           <div className="muted">
-            {aiUsage ? `${aiUsage.calls} calls · ${aiUsage.input_tokens} in / ${aiUsage.output_tokens} out tokens · $${aiUsage.cost_usd.toFixed(4)}` : "–"}
+            {aiUsage ? `${aiUsage.calls} model calls (${aiUsage.cached} cache hits, ${aiUsage.failed} refused) · ${aiUsage.input_tokens} in / ${aiUsage.output_tokens} out tokens · $${aiUsage.cost_usd.toFixed(4)}` : "–"}
           </div>
           {aiStatus && !aiStatus.would_make_paid_calls && (
             <div className="muted">
               Live needs: mock off, paid enabled{aiStatus.api_key_configured ? "" : ", API key"}{aiStatus.model ? "" : ", model"}{aiStatus.prices_configured ? "" : ", prices"}.
             </div>
           )}
+          {(aiUsage?.by_agent ?? []).map((a) => (
+            <div className="item" key={a.agent}>
+              {a.agent}: {a.calls} calls · {a.rejected} rejected · {a.cached} cached · ${a.cost_usd.toFixed(4)}
+              {Object.entries(a.reasons).map(([why, n]) => <div className="muted" key={why}>{n}× {why}</div>)}
+            </div>
+          ))}
           {(aiUsage?.by_task ?? []).map((t) => (
             <div className="item" key={t.task + t.outcome}>{t.task} <span className="badge">{t.outcome}</span> <span className="muted">{t.calls}×</span></div>
           ))}

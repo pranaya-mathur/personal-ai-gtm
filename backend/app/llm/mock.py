@@ -50,6 +50,25 @@ class MockLLM:
             out = S.ResearchBrief(
                 findings=[claim], open_questions=["Budget and timeline are not stated."]
             )
+        elif schema is S.OpportunityDossier:
+            out = S.OpportunityDossier(
+                summary="[MOCK] " + _first_quote(text),
+                requirements=[claim],
+                budget=None,
+                deadline=None,
+                ai_project="explicit"
+                if re.search(r"\b(AI|LLM|RAG|machine[- ]learning|retrieval)", text, re.I)
+                else "none",
+                ai_project_support=claim
+                if re.search(r"\b(AI|LLM|RAG|machine[- ]learning|retrieval)", text, re.I)
+                else None,
+                verdict="supported",
+                reliability=0.7,
+                findings=[claim],
+                open_questions=["Budget and timeline are not stated."],
+                fit_score=70.0,
+                risks=["[MOCK] unverified beyond the cited source"],
+            )
         elif schema is S.QualificationAssessment:
             out = S.QualificationAssessment(
                 fit_score=70.0,

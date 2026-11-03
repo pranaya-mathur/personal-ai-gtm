@@ -81,6 +81,25 @@ class SourceChecker:
         rp.parse(resp.text.splitlines())
         return rp.can_fetch(USER_AGENT, url)
 
+    def fetch_page(self, url: str) -> tuple[SourceCheckStatus, str]:
+        """Same safety rules as `check` (SSRF guard, robots.txt, redirects re-validated, size cap).
+        Returns (CONFIRMED + raw body) on success, otherwise (BLOCKED/UNREACHABLE, "")."""
+        current = url
+        for _ in range(MAX_REDIRECTS + 1):
+            if not self._url_is_safe(current) or not self._robots_allows(current):
+                return SourceCheckStatus.BLOCKED, ""
+            try:
+                resp = self._http.get(current)
+            except httpx.HTTPError:
+                return SourceCheckStatus.UNREACHABLE, ""
+            if resp.status_code in {301, 302, 303, 307, 308} and "location" in resp.headers:
+                current = urljoin(current, resp.headers["location"])
+                continue
+            if resp.status_code >= 400:
+                return SourceCheckStatus.UNREACHABLE, ""
+            return SourceCheckStatus.CONFIRMED, resp.text[:MAX_BYTES]
+        return SourceCheckStatus.UNREACHABLE, ""
+
     def check(self, url: str, claim_text: str) -> SourceCheckStatus:
         claim = _norm(claim_text.split("\n", 1)[0])
         if not claim:

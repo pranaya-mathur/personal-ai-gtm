@@ -47,6 +47,7 @@ class AITasks:
         run_id: uuid.UUID | None,
         min_claims: int,
         recipient: str | None = None,
+        agent: str = "research_evidence",
     ) -> T | None:
         items = self.evidence_for(opp)
         if not items:
@@ -65,7 +66,11 @@ class AITasks:
             run_id=run_id,
             opportunity_id=opp.id,
             validator=validator,
+            agent=agent,
         )
+
+    def dossier(self, opp: Opportunity, run_id: uuid.UUID | None) -> S.OpportunityDossier | None:
+        return self._run("dossier", S.OpportunityDossier, opp, run_id, 1)
 
     def analyze(self, opp: Opportunity, run_id: uuid.UUID | None) -> S.OpportunityAnalysis | None:
         return self._run("opportunity_analysis", S.OpportunityAnalysis, opp, run_id, 1)
@@ -91,4 +96,6 @@ class AITasks:
     def draft(
         self, opp: Opportunity, run_id: uuid.UUID | None, recipient: str | None
     ) -> S.OutreachDraftAI | None:
-        return self._run("outreach_draft", S.OutreachDraftAI, opp, run_id, 1, recipient)
+        return self._run(
+            "outreach_draft", S.OutreachDraftAI, opp, run_id, 1, recipient, "outreach_intelligence"
+        )

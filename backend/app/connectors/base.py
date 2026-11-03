@@ -7,7 +7,7 @@ configuration, so a provider can be swapped without touching agents or the orche
 
 import enum
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -48,6 +48,14 @@ class RawFinding(BaseModel):
     organization_country: str | None = None
     contacts: list[RawContact] = Field(default_factory=list)
     provider_confidence: float = Field(default=0.5, ge=0, le=1)
+    # Structured facts, only when the provider record states them.
+    source_status: Literal["open", "closed", "awarded", "unknown"] = "unknown"
+    deadline: datetime | None = None
+    budget_text: str | None = None
+    contact_route: str | None = None  # buyer email / application URL printed in the source
+    # Agency findings: which of the three partnership classes the SOURCE supports.
+    evergreen: bool = False  # live page with no publication date: treated as current, stays undated
+    partnership_class: Literal["active_requirement", "verified_model", "potential"] | None = None
 
 
 class CostEstimate(BaseModel):

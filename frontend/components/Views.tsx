@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import {
-  api, jobTotals, splitReal,
-  type Analysis, type BoardRow, type CostSummary, type OpportunityDetail, type Run,
+  api, jobTotals, splitReal, viewRows,
+  type Analysis, type BoardRow, type CostSummary, type OpportunityDetail, type RecordView, type Run,
 } from "@/lib/api";
 
 const MOCK_BADGE = <span className="badge err" title="Fictional fixture, not a real lead">MOCK FIXTURE</span>;
@@ -37,53 +37,57 @@ export function CostPanel({ costs }: { costs: CostSummary | null }) {
   );
 }
 
-export function OpportunityView({ rows, onOpen }: { rows: BoardRow[]; onOpen: (id: string) => void }) {
-  const { real, mock } = splitReal(rows.filter((r) => r.category !== "verified_partnership"));
+const TRIAGE_LABEL: Record<string, string> = {
+  actionable: "Actionable (still verify yourself)",
+  needs_verification: "Needs verification",
+  rejected: "Rejected",
+  unassessed: "Not yet assessed",
+};
+
+function Stage({ r }: { r: BoardRow }) {
   return (
-    <section className="card" style={{ overflowX: "auto" }}>
-      <h2>Opportunity intelligence ({real.length})</h2>
-      <MockNotice n={mock.length} />
-      {real.length === 0 ? <Empty what="real opportunities" /> : (
-        <table>
-          <thead><tr><th>Organization</th><th>Country</th><th>Requirement</th><th>Class</th><th>Budget</th><th>Status</th><th>Score</th><th>Next action</th></tr></thead>
-          <tbody>
-            {real.map((r) => (
-              <tr key={r.id}>
-                <td>{r.organization ?? "unknown"}</td>
-                <td>{r.country ?? "unknown"}</td>
-                <td><a href="#" onClick={(e) => { e.preventDefault(); onOpen(r.id); }}>{r.title}</a></td>
-                <td><span className="badge">{r.category}</span></td>
-                <td>{r.stated_budget ?? "unknown"}</td>
-                <td><span className="badge">{r.status}</span><span className="badge">{r.verification_status}</span></td>
-                <td>{r.score ?? "–"}</td>
-                <td>{r.next_action}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </section>
+    <div>
+      <span className="badge">{TRIAGE_LABEL[r.triage] ?? r.triage}</span>
+      <span className="badge">tech: {r.technical_relevance}</span>
+      <span className="badge">source: {r.source_status}</span>
+      {r.rejection_reason && <span className="badge err">{r.rejection_reason}</span>}
+      <div className="muted">
+        {Object.entries(r.stage_b).map(([k, v]) => `${k}: ${v.result}`).join(" · ")}
+      </div>
+      {r.score !== null && <div className="muted">rank score {r.score}</div>}
+    </div>
   );
 }
 
-export function PartnershipView({ rows, onOpen }: { rows: BoardRow[]; onOpen: (id: string) => void }) {
-  const { real, mock } = splitReal(rows.filter((r) => r.organization_kind === "agency"));
+export function RecordsView({
+  rows, view, title, blurb, onOpen,
+}: { rows: BoardRow[]; view: RecordView; title: string; blurb: string; onOpen: (id: string) => void }) {
+  const mock = splitReal(rows).mock.filter((r) => r.view === view).length;
+  const list = viewRows(rows, view);
   return (
     <section className="card" style={{ overflowX: "auto" }}>
-      <h2>Agency partnership intelligence ({real.length})</h2>
-      <MockNotice n={mock.length} />
-      {real.length === 0 ? <Empty what="agency partnership records" /> : (
+      <h2>{title} ({list.length})</h2>
+      <p className="muted">{blurb}</p>
+      <MockNotice n={mock} />
+      {list.length === 0 ? <Empty what={title.toLowerCase()} /> : (
         <table>
-          <thead><tr><th>Organization</th><th>Partnership evidence</th><th>Class</th><th>Fit score</th><th>Contact route</th><th>Relationship</th></tr></thead>
+          <thead><tr>
+            <th>Organization</th><th>Country</th><th>Requirement</th><th>Original evidence</th>
+            <th>Qualification</th><th>Budget</th><th>Missing information</th><th>Next action</th>
+          </tr></thead>
           <tbody>
-            {real.map((r) => (
+            {list.map((r) => (
               <tr key={r.id}>
-                <td>{r.organization ?? "unknown"}{r.domain ? ` (${r.domain})` : ""}</td>
-                <td><a href="#" onClick={(e) => { e.preventDefault(); onOpen(r.id); }}>{r.title}</a> · {r.evidence_count} source(s)</td>
-                <td><span className="badge">{r.category === "verified_partnership" ? "verified partnership" : "potential only"}</span></td>
-                <td>{r.score ?? "–"}</td>
-                <td>{r.source_url ? <a href={r.source_url} target="_blank" rel="noopener noreferrer">source page</a> : "unknown"}</td>
-                <td><span className="badge">{r.status}</span></td>
+                <td>{r.organization ?? "unknown"}{r.organization_kind === "agency" ? " (agency)" : ""}</td>
+                <td>{r.country ?? "unknown"}</td>
+                <td><a href="#" onClick={(e) => { e.preventDefault(); onOpen(r.id); }}>{r.title}</a>
+                  <div className="muted">{r.verification_status}{r.deadline ? ` · deadline ${new Date(r.deadline).toLocaleDateString()}` : ""}</div></td>
+                <td>{r.evidence_excerpt && <blockquote>{r.evidence_excerpt}</blockquote>}
+                  {r.source_url && <a href={r.source_url} target="_blank" rel="noopener noreferrer">source ({r.evidence_count})</a>}</td>
+                <td><Stage r={r} /></td>
+                <td>{r.stated_budget ?? "unknown"}</td>
+                <td>{r.missing.length === 0 ? "–" : <ul>{r.missing.map((m) => <li key={m}>{m}</li>)}</ul>}</td>
+                <td>{r.next_action}</td>
               </tr>
             ))}
           </tbody>
@@ -148,6 +152,11 @@ export function ResearchDetail({ id, row }: { id: string | null; row: BoardRow |
         <div className="muted">{row?.organization ?? "unknown organization"} · {row?.country ?? "country unknown"}</div>
         <h2>Decision explanation</h2>
         <p>{row?.qualification_rationale ?? "Not yet qualified."}</p>
+        {row && row.reasons.length > 0 && <ul>{row.reasons.map((x) => <li key={x}>{x}</li>)}</ul>}
+        {row && Object.entries(row.stage_b).map(([k, v]) => (
+          <div className="item" key={k}><span className="badge">{v.result}</span>{k}: {v.detail}</div>
+        ))}
+        {row && row.missing.length > 0 && <><h2>Missing information</h2><ul>{row.missing.map((m) => <li key={m}>{m}</li>)}</ul></>}
         <p><b>Next action:</b> {row?.next_action}</p>
       </div>
       <div className="card">

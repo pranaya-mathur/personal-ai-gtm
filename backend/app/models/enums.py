@@ -63,3 +63,28 @@ class SourceCheckStatus(enum.StrEnum):
     MISMATCH = "mismatch"  # page fetched but claim not found
     UNREACHABLE = "unreachable"
     BLOCKED = "blocked"  # robots.txt disallows, or URL failed safety checks
+
+
+class TechnicalRelevance(enum.StrEnum):
+    """Stage A: does the original source itself describe AI implementation work?"""
+
+    UNASSESSED = "unassessed"
+    RELEVANT = "relevant"
+    UNCLEAR = "unclear"  # AI is mentioned but the source does not clearly describe AI work
+    NOT_RELEVANT = "not_relevant"
+
+
+class Triage(enum.StrEnum):
+    """Stage A + B outcome. Independent of human verification and of the evidence category."""
+
+    UNASSESSED = "unassessed"
+    ACTIONABLE = "actionable"  # relevant, active, external requirement, usable contact route
+    NEEDS_VERIFICATION = "needs_verification"  # plausibly relevant, something still unconfirmed
+    REJECTED = "rejected"  # explicit: off-topic, closed, awarded or no external requirement
+
+
+class SourceStatus(enum.StrEnum):
+    UNKNOWN = "unknown"
+    OPEN = "open"
+    CLOSED = "closed"
+    AWARDED = "awarded"

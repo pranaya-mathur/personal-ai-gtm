@@ -55,7 +55,23 @@ export interface BoardRow {
   ai_summary: string | null;
   next_action: string;
   last_seen_at: string;
+  triage: "unassessed" | "actionable" | "needs_verification" | "rejected";
+  technical_relevance: string;
+  rejection_reason: string | null;
+  source_status: string;
+  deadline: string | null;
+  contact_route: string | null;
+  missing: string[];
+  reasons: string[];
+  stage_a: Record<string, unknown>;
+  stage_b: Record<string, { result: string; detail: string }>;
+  view: RecordView;
+  evidence_excerpt: string | null;
 }
+
+export type RecordView =
+  | "active_project" | "needs_verification" | "verified_partnership"
+  | "potential_partner" | "rejected" | "unqualified_signal";
 
 export interface CostSummary {
   lines: { family: string; spent_usd: number; cap_usd: number | null; remaining_usd: number | null }[];
@@ -82,7 +98,7 @@ export interface Analysis {
   output: Record<string, unknown> | null;
 }
 
-export const TOTAL_NODES = 8;
+export const TOTAL_NODES = 9;
 
 export interface Evidence {
   id: string;
@@ -134,7 +150,13 @@ export interface AiUsage {
   output_tokens: number;
   cost_usd: number;
   calls: number;
+  cached: number;
+  failed: number;
   by_task: { task: string; outcome: string; calls: number; cost_usd: number }[];
+  by_agent: {
+    agent: string; calls: number; cached: number; failed: number; rejected: number;
+    input_tokens: number; output_tokens: number; cost_usd: number; reasons: Record<string, number>;
+  }[];
 }
 
 export function runProgress(r: Run): number {
@@ -227,4 +249,9 @@ export function jobTotals(run: Run): JobTotals {
     t.cost_usd += s.cost_usd;
   }
   return t;
+}
+
+/** Dashboard lists. Mock fixtures are removed first; each real record is in exactly one list. */
+export function viewRows(rows: BoardRow[], view: RecordView): BoardRow[] {
+  return splitReal(rows).real.filter((r) => r.view === view);
 }

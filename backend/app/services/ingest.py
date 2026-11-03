@@ -33,6 +33,10 @@ def classify(finding: RawFinding) -> OpportunityCategory:
     if finding.kind is SignalKind.PROJECT_REQUEST and has_proof:
         return OpportunityCategory.CONFIRMED_DEMAND
     if finding.kind is SignalKind.PARTNER_ACTIVITY and has_proof:
+        if finding.partnership_class == "active_requirement":
+            return OpportunityCategory.CONFIRMED_DEMAND  # agency states a delivery need
+        if finding.partnership_class == "potential":
+            return OpportunityCategory.SPECULATIVE_PROSPECT  # no demand/model evidence
         return OpportunityCategory.VERIFIED_PARTNERSHIP
     return OpportunityCategory.SPECULATIVE_PROSPECT
 
@@ -90,7 +94,7 @@ def ingest_finding(
     max_age_days: int,
 ) -> IngestOutcome:
     category = classify(finding)
-    fresh = is_fresh(finding.published_at, max_age_days)
+    fresh = finding.evergreen or is_fresh(finding.published_at, max_age_days)
     org_kind = (
         OrganizationKind.AGENCY
         if finding.kind is SignalKind.PARTNER_ACTIVITY
@@ -141,6 +145,10 @@ def ingest_finding(
             organization_id=org.id if org else None,
             confidence=finding.provider_confidence,
             dedupe_key=key,
+            source_status=finding.source_status,
+            deadline=finding.deadline,
+            budget_text=finding.budget_text,
+            contact_route=finding.contact_route,
             verification_status=(
                 VerificationStatus.UNVERIFIED if fresh else VerificationStatus.STALE
             ),
@@ -149,6 +157,11 @@ def ingest_finding(
         session.flush()
     else:
         opp.last_seen_at = utcnow()
+        if finding.source_status != "unknown":
+            opp.source_status = finding.source_status
+        opp.deadline = opp.deadline or finding.deadline
+        opp.budget_text = opp.budget_text or finding.budget_text
+        opp.contact_route = opp.contact_route or finding.contact_route
         opp.confidence = max(opp.confidence, finding.provider_confidence)
         if fresh and opp.verification_status == VerificationStatus.STALE:
             opp.verification_status = VerificationStatus.UNVERIFIED

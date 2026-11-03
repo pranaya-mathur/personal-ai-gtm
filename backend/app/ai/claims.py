@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from app.ai.schemas import (
     Claim,
     EvidenceEvaluation,
+    OpportunityDossier,
     OutreachDraftAI,
     QualificationAssessment,
 )
@@ -65,6 +66,13 @@ def validate_output(
 
     if isinstance(output, EvidenceEvaluation) and not 0 <= output.reliability <= 1:
         problems.append("reliability outside 0..1")
+    if isinstance(output, OpportunityDossier):
+        if not 0 <= output.reliability <= 1:
+            problems.append("reliability outside 0..1")
+        if not 0 <= output.fit_score <= 100:
+            problems.append("fit_score outside 0..100")
+        if output.ai_project == "explicit" and output.ai_project_support is None:
+            problems.append("ai_project 'explicit' requires ai_project_support quote")
     if isinstance(output, QualificationAssessment):
         if not 0 <= output.fit_score <= 100:
             problems.append("fit_score outside 0..100")

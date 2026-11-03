@@ -62,3 +62,21 @@ class OutreachDraftAI(_Strict):
     subject: str
     body: str
     claims: list[Claim]  # every factual statement about the recipient/opportunity in `body`
+
+
+class OpportunityDossier(_Strict):
+    """One call that replaces analysis + extraction + evidence evaluation + research + fit
+    assessment, so later agents reuse it instead of re-reading the same source."""
+
+    summary: str
+    requirements: list[Claim]  # only needs the source explicitly states
+    budget: Claim | None
+    deadline: Claim | None
+    ai_project: Literal["explicit", "implied", "none"]  # does the source describe AI work?
+    ai_project_support: Claim | None  # required quote when ai_project == "explicit"
+    verdict: Literal["supported", "partially_supported", "unsupported"]
+    reliability: float  # 0..1
+    findings: list[Claim]  # useful, source-backed facts about the buyer/partner
+    open_questions: list[str]  # what the evidence does NOT answer
+    fit_score: float  # 0..100 fit for a paid AI implementation team
+    risks: list[str]

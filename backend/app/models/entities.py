@@ -25,6 +25,9 @@ from app.models.enums import (
     OutreachStatus,
     RunStatus,
     SourceCheckStatus,
+    SourceStatus,
+    TechnicalRelevance,
+    Triage,
     VerificationStatus,
 )
 
@@ -139,6 +142,11 @@ class Opportunity(Base, IdMixin, TimestampMixin):
             _enum_check("verification_status", VerificationStatus), name="ck_opps_verification"
         ),
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_opps_confidence"),
+        CheckConstraint(_enum_check("triage", Triage), name="ck_opps_triage"),
+        CheckConstraint(
+            _enum_check("technical_relevance", TechnicalRelevance), name="ck_opps_tech_relevance"
+        ),
+        CheckConstraint(_enum_check("source_status", SourceStatus), name="ck_opps_source_status"),
         Index("ix_opportunities_category_status", "category", "status"),
     )
 
@@ -152,6 +160,25 @@ class Opportunity(Base, IdMixin, TimestampMixin):
     )
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     dedupe_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Structured facts taken from the provider record (None/unknown = not stated by the source).
+    source_status: Mapped[str] = mapped_column(
+        String(16), default=SourceStatus.UNKNOWN, server_default="unknown", nullable=False
+    )
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    budget_text: Mapped[str | None] = mapped_column(String(256))
+    contact_route: Mapped[str | None] = mapped_column(String(2048))
+    # Two-stage qualification (see services/triage.py); reasons and gaps are stored, not inferred.
+    technical_relevance: Mapped[str] = mapped_column(
+        String(16),
+        default=TechnicalRelevance.UNASSESSED,
+        server_default="unassessed",
+        nullable=False,
+    )
+    triage: Mapped[str] = mapped_column(
+        String(24), default=Triage.UNASSESSED, server_default="unassessed", nullable=False
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(String(64))
+    assessment: Mapped[dict] = mapped_column(JsonType, default=dict, nullable=False)  # type: ignore[type-arg]
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -294,7 +321,9 @@ class LlmUsage(Base, IdMixin):
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     cost_usd: Mapped[float] = mapped_column(Numeric(14, 8), nullable=False)
-    outcome: Mapped[str] = mapped_column(String(16), nullable=False)  # accepted | rejected
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)  # accepted | rejected | cached
+    agent: Mapped[str | None] = mapped_column(String(48))
+    reason: Mapped[str | None] = mapped_column(Text)  # why an output was rejected
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -304,7 +333,10 @@ class AiAnalysis(Base, IdMixin):
     """Persisted AI output with its validation verdict. Rejected outputs are kept for audit."""
 
     __tablename__ = "ai_analyses"
-    __table_args__ = (Index("ix_ai_analyses_opportunity", "opportunity_id"),)
+    __table_args__ = (
+        Index("ix_ai_analyses_opportunity", "opportunity_id"),
+        Index("ix_ai_analyses_input_hash", "input_hash"),
+    )
 
     opportunity_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("opportunities.id", ondelete="CASCADE"), nullable=False
@@ -316,6 +348,7 @@ class AiAnalysis(Base, IdMixin):
     output: Mapped[dict | None] = mapped_column(JsonType)  # type: ignore[type-arg]
     validated: Mapped[bool] = mapped_column(Boolean, nullable=False)
     rejection_reason: Mapped[str | None] = mapped_column(Text)
+    input_hash: Mapped[str | None] = mapped_column(String(64))  # cache key: task+model+prompt
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )

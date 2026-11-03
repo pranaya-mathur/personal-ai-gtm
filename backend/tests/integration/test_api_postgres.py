@@ -139,15 +139,16 @@ def test_ai_pipeline_on_postgres_mock_mode(client, pg_url) -> None:  # type: ign
     _process_queue(pg_url)
     usage = client.get("/ai/usage").json()
     assert usage["calls"] > 0 and usage["cost_usd"] == 0 and usage["input_tokens"] > 0
-    assert {t["task"] for t in usage["by_task"]} >= {"opportunity_analysis", "outreach_draft"}
+    assert {t["task"] for t in usage["by_task"]} == {"dossier", "outreach_draft"}
+    assert {a["agent"] for a in usage["by_agent"]} == {"research_evidence", "outreach_intelligence"}
 
     demand = client.get("/opportunities", params={"category": "confirmed_demand"}).json()
     fresh = next(o for o in demand if o["verification_status"] != "stale")
     analyses = client.get(f"/opportunities/{fresh['id']}/analyses").json()
     assert analyses and all(a["validated"] for a in analyses)
     ev_ids = {e["id"] for e in client.get(f"/opportunities/{fresh['id']}").json()["evidence"]}
-    first = next(a for a in analyses if a["task"] == "opportunity_analysis")["output"]
-    assert first["claims"][0]["evidence_id"] in ev_ids  # claims cite stored evidence
+    first = next(a for a in analyses if a["task"] == "dossier")["output"]
+    assert first["requirements"][0]["evidence_id"] in ev_ids  # claims cite stored evidence
 
 
 def test_board_flags_mock_records_and_costs_endpoint(client, pg_url) -> None:  # type: ignore[no-untyped-def]
@@ -179,3 +180,20 @@ def test_cancel_run_endpoint(client) -> None:  # type: ignore[no-untyped-def]
     assert out.status_code == 200 and out.json()["status"] == "cancelled"
     assert client.post(f"/runs/{run['id']}/cancel").status_code == 409  # already terminal
     assert client.post(f"/runs/{'0' * 8}-0000-0000-0000-{'0' * 12}/cancel").status_code == 404
+
+
+def test_board_exposes_two_stage_assessment_and_views(client, pg_url) -> None:  # type: ignore[no-untyped-def]
+    client.post("/runs", json={})
+    _process_queue(pg_url)
+    rows = {r["title"]: r for r in client.get("/board").json()}
+    rag = rows["RAG assistant for internal support knowledge base"]
+    assert rag["triage"] == "actionable" and rag["view"] == "active_project"
+    assert rag["stage_b"]["active"]["result"] == "pass" and rag["is_mock"] is True
+    assert any("budget" in m for m in rag["missing"])  # unknown budget stays visible
+    closed = rows["Document-processing automation pilot"]
+    assert closed["triage"] == "rejected" and closed["view"] == "rejected"
+    assert "closed" in closed["rejection_reason"]
+    spec = rows["Mock Buyer Three expanded its data team"]
+    assert spec["view"] != "active_project"  # speculative prospects never count as projects
+    partners = [r for r in rows.values() if r["view"] == "verified_partnership"]
+    assert len(partners) == 2 and all(p["triage"] == "needs_verification" for p in partners)

@@ -23,9 +23,11 @@ from app.connectors.base import DiscoveryConnector, DiscoveryQuery
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.llm import LLMClient, build_llm
+from app.models import Opportunity
 from app.services.source_check import SourceChecker
 from app.services.source_verification import verify_sources
 from app.services.spend import SpendGuard
+from app.services.triage import apply_assessment, assess_opportunity
 
 log = get_logger(__name__)
 
@@ -34,6 +36,7 @@ NODE_ORDER = [
     "agency_partnership_intelligence",
     "source_verification",
     "research_evidence",
+    "triage",
     "ai_analysis",
     "qualification",
     "outreach_intelligence",
@@ -49,6 +52,7 @@ class WorkflowState(TypedDict, total=False):
     connector_stats: list[dict[str, Any]]
     source_checks: dict[str, Any]
     ai: dict[str, Any]
+    triage: dict[str, int]
     ai_results: dict[str, dict[str, Any]]
     research: dict[str, dict[str, Any]]
     qualified: dict[str, dict[str, Any]]
@@ -107,6 +111,19 @@ def build_graph(
     def research(state: WorkflowState) -> dict[str, Any]:
         return {"research": ResearchEvidenceAgent(session).run(state.get("opportunity_ids", []))}
 
+    def triage(state: WorkflowState) -> dict[str, Any]:
+        """Deterministic stage A+B before any model call; rejected records never reach the AI."""
+        summary: dict[str, int] = {}
+        for oid in state.get("opportunity_ids", []):
+            opp = session.get(Opportunity, uuid.UUID(oid))
+            if opp is None:
+                continue
+            a = assess_opportunity(session, opp, settings)
+            apply_assessment(opp, a)
+            summary[str(a.triage)] = summary.get(str(a.triage), 0) + 1
+        session.flush()
+        return {"triage": summary}
+
     def ai_analysis(state: WorkflowState) -> dict[str, Any]:
         if tasks is None:
             return {"ai": {"skipped": ai_reason}}
@@ -136,6 +153,7 @@ def build_graph(
         "agency_partnership_intelligence": discovery(AgencyPartnershipIntelligenceAgent),
         "source_verification": source_verification,
         "research_evidence": research,
+        "triage": triage,
         "ai_analysis": ai_analysis,
         "qualification": qualification,
         "outreach_intelligence": outreach,

@@ -29,6 +29,7 @@ from app.models.enums import (
     OpportunityStatus,
     OutreachStatus,
     RunStatus,
+    Triage,
     VerificationStatus,
 )
 from app.orchestrator.runner import enqueue_run
@@ -65,6 +66,25 @@ def ready(db: Session = Depends(get_db)) -> dict[str, str]:
     return {"status": "ready"}
 
 
+_FREE_NOTES = {
+    "public_partner_pages": "Free. Reads partner/subcontracting pages of companies listed in "
+    "AGENCY_SEED_URLS (robots.txt + SSRF-safe). States-nothing pages yield no record.",
+    "public_announcement_feeds": "Free. RSS/Atom feeds listed in AGENCY_FEED_URLS.",
+    "wikidata_agencies": "Free open registry (CC0). Produces POTENTIAL partners only: existence, "
+    "not demand.",
+}
+
+
+def _usable(name: str, spec: object | None, settings: object) -> bool:
+    if spec is not None:
+        return bool(spec.reviewed)  # type: ignore[attr-defined]
+    if name == "public_partner_pages":
+        return bool(settings.agency_seed_list)  # type: ignore[attr-defined]
+    if name == "public_announcement_feeds":
+        return bool(settings.agency_feed_list)  # type: ignore[attr-defined]
+    return True
+
+
 @router.get("/connectors")
 def connectors() -> list[dict[str, object]]:
     """All known providers with whether they are enabled, free, and approved to spend."""
@@ -77,13 +97,13 @@ def connectors() -> list[dict[str, object]]:
             {
                 "name": name,
                 "enabled": name in enabled,
-                "is_mock": spec is None,
+                "is_mock": name.startswith("mock"),
                 "paid": spec is not None,
-                "usable": spec is None or spec.reviewed,
+                "usable": _usable(name, spec, settings),
                 "paid_execution_approved": settings.apify_paid_execution_approved if spec else None,
                 "actor_id": spec.actor_id if spec else None,
                 "schema_validated_on": spec.validated_on if spec else None,
-                "notes": spec.notes if spec else "offline fixture data",
+                "notes": spec.notes if spec else _FREE_NOTES.get(name, "offline fixture data"),
             }
         )
     return out
@@ -117,12 +137,16 @@ def ai_status() -> dict[str, object]:
 
 @router.get("/ai/usage")
 def ai_usage(db: Session = Depends(get_db)) -> dict[str, object]:
+    """`calls` = real model calls (accepted + rejected); cache hits/refusals are separate."""
+    real = LlmUsage.outcome.in_(["accepted", "rejected"])
     totals = db.execute(
         select(
             func.coalesce(func.sum(LlmUsage.input_tokens), 0),
             func.coalesce(func.sum(LlmUsage.output_tokens), 0),
             func.coalesce(func.sum(LlmUsage.cost_usd), 0),
-            func.count(),
+            func.count().filter(real),
+            func.count().filter(LlmUsage.outcome == "cached"),
+            func.count().filter(LlmUsage.outcome == "failed"),
         )
     ).one()
     by_task = db.execute(
@@ -130,15 +154,44 @@ def ai_usage(db: Session = Depends(get_db)) -> dict[str, object]:
             LlmUsage.task, LlmUsage.outcome
         )
     ).all()
+    by_agent: dict[str, dict[str, object]] = {}
+    for row in db.execute(select(LlmUsage)).scalars():
+        a = by_agent.setdefault(
+            row.agent or "unattributed",
+            {
+                "calls": 0,
+                "cached": 0,
+                "failed": 0,
+                "rejected": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 0.0,
+                "reasons": {},
+            },
+        )
+        if row.outcome in ("accepted", "rejected"):
+            a["calls"] += 1  # type: ignore[operator]
+        if row.outcome in ("cached", "failed", "rejected"):
+            a[row.outcome] += 1  # type: ignore[operator]
+        a["input_tokens"] += row.input_tokens  # type: ignore[operator]
+        a["output_tokens"] += row.output_tokens  # type: ignore[operator]
+        a["cost_usd"] += float(row.cost_usd)  # type: ignore[operator]
+        if row.reason:
+            key = row.reason[:80]
+            reasons: dict[str, int] = a["reasons"]  # type: ignore[assignment]
+            reasons[key] = reasons.get(key, 0) + 1
     return {
         "input_tokens": int(totals[0]),
         "output_tokens": int(totals[1]),
         "cost_usd": float(totals[2]),
         "calls": int(totals[3]),
+        "cached": int(totals[4]),
+        "failed": int(totals[5]),
         "by_task": [
             {"task": t, "outcome": o, "calls": int(n), "cost_usd": float(c or 0)}
             for t, o, n, c in by_task
         ],
+        "by_agent": [{"agent": k, **v} for k, v in sorted(by_agent.items())],
     }
 
 
@@ -335,8 +388,30 @@ def metrics(db: Session = Depends(get_db)) -> dict[str, object]:
     return PipelineAnalyticsAgent(db).run()
 
 
+def view_for(opp: Opportunity, org_kind: str | None) -> str:
+    """Exactly one list per record. Speculative prospects are never counted as active projects."""
+    if opp.triage == Triage.REJECTED:
+        return "rejected"
+    cat = opp.category
+    if cat == OpportunityCategory.VERIFIED_PARTNERSHIP:
+        return "verified_partnership"
+    if cat == OpportunityCategory.SPECULATIVE_PROSPECT:
+        return "potential_partner" if org_kind == "agency" else "unqualified_signal"
+    if opp.triage == Triage.ACTIONABLE:
+        return "active_project"
+    return "needs_verification"
+
+
 def next_action(opp: Opportunity, score: float | None) -> str:
     """Deterministic recommendation (no LLM): what a human should do next."""
+    stored = (opp.assessment or {}).get("next_action")
+    if stored and opp.triage != Triage.UNASSESSED:
+        if (
+            opp.triage == Triage.ACTIONABLE
+            and opp.verification_status != VerificationStatus.VERIFIED
+        ):
+            return f"{stored}. Also verify the source yourself and mark it verified."
+        return str(stored)
     if opp.verification_status == VerificationStatus.STALE:
         return "Source is stale: re-check the original posting before any action"
     if opp.status == OpportunityStatus.DISQUALIFIED:
@@ -414,6 +489,18 @@ def board(
                 ai_summary=summary,
                 next_action=next_action(opp, score),
                 last_seen_at=opp.last_seen_at,
+                triage=opp.triage,
+                technical_relevance=opp.technical_relevance,
+                rejection_reason=opp.rejection_reason,
+                source_status=opp.source_status,
+                deadline=opp.deadline,
+                contact_route=opp.contact_route,
+                missing=list((opp.assessment or {}).get("missing", [])),
+                reasons=list((opp.assessment or {}).get("reasons", [])),
+                stage_a=dict((opp.assessment or {}).get("stage_a", {})),
+                stage_b=dict((opp.assessment or {}).get("stage_b", {})),
+                view=view_for(opp, org.kind if org else None),
+                evidence_excerpt=(evs[0].original_text[:300] if evs else None),
             )
         )
     return rows

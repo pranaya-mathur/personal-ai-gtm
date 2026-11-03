@@ -71,8 +71,10 @@ def test_ted_maps_only_valid_open_notices(approved: Settings) -> None:
     q = DiscoveryQuery(keywords=["AI", "machine learning"], regions=["DEU", "XXX"], max_results=50)
     result = conn.discover(q)
 
-    assert [f.title for f in result.findings] == [
-        "Development of an AI knowledge assistant for citizen services"
+    # the closed tender is KEPT but flagged; only the notice without a source link is dropped
+    assert [(f.title, f.source_status) for f in result.findings] == [
+        ("Development of an AI knowledge assistant for citizen services", "open"),
+        ("Legacy ERP maintenance", "closed"),
     ]
     f = result.findings[0]
     assert f.kind is SignalKind.PROJECT_REQUEST
@@ -174,15 +176,21 @@ def test_workflow_with_apify_persists_dedupes_and_tracks_spend(session, approved
     assert run.status == "succeeded"
 
     opps = session.execute(select(Opportunity)).scalars().all()
-    # TED: 1 valid; World Bank: 2 rows are the same notice (canonical URL + title) => 1
-    assert len(opps) == 2
+    # TED: 1 open + 1 closed (kept, flagged); World Bank: duplicate rows collapse => 1
+    assert len(opps) == 3
+    closed = [o for o in opps if o.source_status == "closed"]
+    assert (
+        len(closed) == 1
+        and closed[0].triage == "rejected"
+        and "closed" in (closed[0].rejection_reason or "")
+    )
     assert {o.category for o in opps} == {"confirmed_demand"}
     assert all(o.verification_status != "verified" for o in opps)
 
     evs = session.execute(select(Evidence)).scalars().all()
     assert {e.provider for e in evs} == {"apify_ted_tenders", "apify_worldbank_tenders"}
     assert all(e.source_url and e.original_text for e in evs)
-    assert len(evs) == 2  # trailing-slash duplicate collapsed
+    assert len(evs) == 3  # trailing-slash duplicate collapsed (TED open + closed, WB one)
 
     assert [c.email for c in session.execute(select(Contact)).scalars()] == [
         "procurement@agri.example"
@@ -193,7 +201,7 @@ def test_workflow_with_apify_persists_dedupes_and_tracks_spend(session, approved
     n_opp = len(opps)
     _run(session, approved, [ted, wb])  # same results again
     assert session.execute(select(func.count()).select_from(Opportunity)).scalar_one() == n_opp
-    assert session.execute(select(func.count()).select_from(Evidence)).scalar_one() == 2
+    assert session.execute(select(func.count()).select_from(Evidence)).scalar_one() == 3
 
 
 def test_spend_limit_blocks_apify_before_any_request(session, approved) -> None:  # type: ignore[no-untyped-def]
@@ -241,7 +249,8 @@ def test_recorded_worldbank_item_has_a_parsed_date_and_is_not_stale() -> None:
     assert f is not None and f.published_at is not None
     assert f.organization_name == "Bangladesh Public Procurement Authority"
     item["submissionDeadlineDate"] = "2020-01-01"
-    assert spec.map_item(item, DiscoveryQuery()) is None  # closed windows are skipped
+    closed = spec.map_item(item, DiscoveryQuery())
+    assert closed is not None and closed.source_status == "closed"  # kept, flagged
 
 
 def test_ted_cpv_filter_only_used_without_keywords() -> None:
@@ -265,4 +274,6 @@ def test_ted_only_open_calls_are_mapped() -> None:
     assert "noticeTypes" not in spec.build_input(DiscoveryQuery(keywords=["x"]), 5)
     f = spec.map_item({**base, "noticeType": "cn-standard"}, DiscoveryQuery())
     assert f is not None and f.published_at is not None and f.organization_country == "NOR"
-    assert spec.map_item({**base, "noticeType": "can-standard"}, DiscoveryQuery()) is None
+    award = spec.map_item({**base, "noticeType": "can-standard"}, DiscoveryQuery())
+    assert award is not None and award.source_status == "awarded"
+    assert spec.map_item({**base, "noticeType": "corr"}, DiscoveryQuery()) is None

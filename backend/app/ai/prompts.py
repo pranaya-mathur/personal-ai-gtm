@@ -13,6 +13,15 @@ SYSTEM_BASE = (
 TASK_INSTRUCTIONS = {
     "opportunity_analysis": "Summarise what this opportunity is, in 1-3 sentences, and list the claims behind the summary.",
     "requirement_extraction": "Extract only requirements, budget and deadline that the evidence explicitly states. Use null for budget/deadline when absent.",
+    "dossier": (
+        "Produce ONE structured dossier. summary: 1-3 sentences. requirements/budget/deadline: only "
+        "what the evidence explicitly states (null when absent). ai_project: 'explicit' only if the "
+        "evidence itself describes building/implementing AI/ML/GenAI/RAG/agent/automation work "
+        "(quote it in ai_project_support); 'implied' if AI is only mentioned; else 'none'. verdict "
+        "and reliability: does the evidence support this as an external delivery opportunity. "
+        "findings: source-backed facts. open_questions: what is unknown. fit_score 0..100 for a "
+        "small team delivering paid AI implementation projects; risks stated plainly."
+    ),
     "evidence_evaluation": "Judge whether the evidence actually supports the opportunity as described (title and category). reliability is 0..1. List concrete issues.",
     "research_brief": "Produce source-backed findings useful for approaching this buyer, plus open questions the evidence cannot answer.",
     "qualification": "Assess fit for a team that delivers paid AI/ML implementation projects. fit_score and criterion scores are 0..100; every criterion needs a supporting claim. Name risks plainly.",

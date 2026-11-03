@@ -39,11 +39,18 @@ class Settings(BaseSettings):
     openai_cached_input_usd_per_mtok: float | None = None
     llm_max_output_tokens: int = 1500
     llm_max_retries: int = 3
+    # Per-record / per-task bounds so one record or task cannot consume the run budget.
+    ai_record_budget_usd: float = 0.05
+    ai_max_calls_per_record: int = 3  # per run: 1 dossier + 1 repair + 1 draft
+    ai_task_budget_usd: float = 0.25  # per task per run
+    ai_max_repair_attempts: int = 1
+    ai_task_max_output_tokens: str = "dossier=2500,outreach_draft=900"
     llm_retry_base_seconds: float = 0.5
     llm_spend_limit_per_run_usd: float = 0.50
     ai_max_opportunities_per_run: int = 10
     # Qualification requires the evidence to mention at least one of these (whole words). Keeps
     # generic IT/software procurement from qualifying as an AI project.
+    small_team_max_value: float = 750000.0  # EUR/USD/GBP stated value above this = "large"
     topic_terms: str = (
         "ai,artificial intelligence,machine learning,generative,llm,large language,rag,"
         "retrieval,chatbot,neural,nlp,agentic,computer vision,deep learning"
@@ -64,16 +71,38 @@ class Settings(BaseSettings):
     # Source verification fetches the cited page; off by default (mock URLs are fictional).
     source_verification_enabled: bool = False
 
+    # Agency partnership discovery (free, permitted public sources). Seeds are YOUR list of
+    # company domains/pages and announcement feeds; nothing is guessed or crawled beyond them.
+    agency_seed_urls: str = ""
+    agency_feed_urls: str = ""
+    agency_pages_max: int = 20
+
     worker_poll_interval_seconds: float = 2.0
     worker_max_attempts: int = 3
+
+    @property
+    def agency_seed_list(self) -> list[str]:
+        return [u.strip() for u in self.agency_seed_urls.split(",") if u.strip()]
+
+    @property
+    def agency_feed_list(self) -> list[str]:
+        return [u.strip() for u in self.agency_feed_urls.split(",") if u.strip()]
 
     @property
     def topic_term_list(self) -> list[str]:
         return [t.strip().lower() for t in self.topic_terms.split(",") if t.strip()]
 
+    def max_output_for(self, task: str) -> int:
+        for part in self.ai_task_max_output_tokens.split(","):
+            name, _, val = part.partition("=")
+            if name.strip() == task and val.strip().isdigit():
+                return int(val)
+        return self.llm_max_output_tokens
+
     def model_for(self, task: str) -> str:
         """Model for an AI task; falls back to OPENAI_MODEL when no override is configured."""
         by_stage = {
+            "dossier": self.openai_research_model,
             "opportunity_analysis": self.openai_discovery_model,
             "requirement_extraction": self.openai_discovery_model,
             "evidence_evaluation": self.openai_research_model,

@@ -308,10 +308,7 @@ def test_mock_mode_runs_full_ai_pipeline_free(session, settings) -> None:  # typ
     run = _process(session, settings)
     assert run.status == "succeeded" and run.state["ai"]["considered"] > 0
     tasks = {a.task for a in session.execute(select(AiAnalysis)).scalars()}
-    assert tasks == {
-        "opportunity_analysis", "requirement_extraction", "evidence_evaluation",
-        "research_brief", "qualification", "outreach_draft",
-    }  # fmt: skip
+    assert tasks == {"dossier", "outreach_draft"}  # one reusable call per record, not five
     assert all(a.validated for a in session.execute(select(AiAnalysis)).scalars())
     assert all(float(u.cost_usd) == 0 for u in session.execute(select(LlmUsage)).scalars())
     assert session.execute(select(func.count()).select_from(ProviderSpend)).scalar_one() == 0
@@ -321,6 +318,7 @@ def test_mock_mode_runs_full_ai_pipeline_free(session, settings) -> None:  # typ
         .all()
     )
     assert any("ai_fit_score" in x.criteria for x in q)
+    assert all("assessment" in x.criteria for x in q)
     drafts = session.execute(select(OutreachDraft)).scalars().all()
     assert drafts and all(
         d.status == "pending_approval" and "[YOUR RELEVANT EXPERIENCE]" in d.body for d in drafts
@@ -338,22 +336,29 @@ def test_live_mode_without_approval_makes_no_calls(session) -> None:  # type: ig
     assert session.execute(select(func.count()).select_from(AiAnalysis)).scalar_one() == 0
     assert (
         session.execute(select(func.count()).select_from(OutreachDraft)).scalar_one() > 0
-    )  # template fallback
+    )  # template fallback for the actionable record
 
 
 def test_ai_unsupported_verdict_blocks_qualification(session) -> None:  # type: ignore[no-untyped-def]
     llm = RoutingLLM(is_mock=True, tokens=(10, 10))
     llm.provider = "mock"
-    llm.handlers[S.EvidenceEvaluation] = lambda n, u: S.EvidenceEvaluation(
-        verdict="unsupported", reliability=0.1, issues=["does not state a need"], supporting=[]
-    )
+
+    def unsupported(n, u):  # type: ignore[no-untyped-def]
+        d = MockLLM().complete_structured("", u, S.OpportunityDossier, 10).parsed
+        assert isinstance(d, S.OpportunityDossier)
+        return d.model_copy(update={"verdict": "unsupported", "reliability": 0.1})
+
+    llm.handlers[S.OpportunityDossier] = unsupported
     run = _process(session, Settings(database_url="sqlite://"), llm)
     analyzed = {uuid.UUID(k) for k in run.state["ai_results"]}
     assert analyzed and all(v["verdict"] == "unsupported" for v in run.state["ai_results"].values())
     for opp in session.execute(select(Opportunity).where(Opportunity.id.in_(analyzed))).scalars():
         assert opp.status != "qualified"  # AI said the evidence does not support it
     rows = session.execute(select(Qualification)).scalars().all()
-    assert any("does not support" in r.rationale for r in rows)
+    assert rows and all(
+        r.criteria["assessment"]["stage_a"]["source"] in ("deterministic", "ai_downgraded")
+        for r in rows
+    )
 
 
 def test_ai_stage_is_capped_per_run(session) -> None:  # type: ignore[no-untyped-def]
@@ -364,7 +369,7 @@ def test_ai_stage_is_capped_per_run(session) -> None:  # type: ignore[no-untyped
 
 def test_budget_exhaustion_degrades_to_deterministic(session) -> None:  # type: ignore[no-untyped-def]
     llm = RoutingLLM()  # priced, non-mock
-    s = live(llm_spend_limit_per_run_usd=0.003, llm_max_output_tokens=400)
+    s = live(llm_spend_limit_per_run_usd=0.003, ai_task_max_output_tokens="dossier=400")
     run = _process(session, s, llm)
     assert run.status == "succeeded"
     assert run.state["ai"]["stopped"]
