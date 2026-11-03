@@ -44,9 +44,11 @@ def parse_date(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
     v = value.strip()
-    for fmt in ("%Y-%m-%d", "%Y%m%d", "%d.%m.%Y"):
+    for fmt in ("%Y-%m-%d", "%Y%m%d", "%d.%m.%Y", "%d-%b-%Y"):
         try:
-            return datetime.strptime(v[:10] if fmt != "%Y%m%d" else v[:8], fmt).replace(tzinfo=UTC)
+            return datetime.strptime(
+                v[:8] if fmt == "%Y%m%d" else v[:11] if fmt == "%d-%b-%Y" else v[:10], fmt
+            ).replace(tzinfo=UTC)
         except ValueError:
             continue
     try:
@@ -67,13 +69,15 @@ def _ted_input(q: DiscoveryQuery, max_results: int) -> dict[str, Any]:
     preset = "last_7_days" if days <= 7 else "last_30_days" if days <= 30 else "last_90_days"
     run_input: dict[str, Any] = {
         "datePreset": preset,
-        "noticeTypes": ["cn", "pin-cfc-standard"],  # open calls for competition only
-        "cpvCodes": ["72000000", "48000000"],  # IT services & software packages
         "language": "ENG",
         "maxResults": max_results,
     }
     if q.keywords:
+        # comma = "either"; each entry is an exact phrase (per the Actor's input schema)
         run_input["keywords"] = ", ".join(q.keywords)
+    else:
+        # exact-match CPV filter: only a broad fallback, it excludes sub-codes and over-narrows
+        run_input["cpvCodes"] = ["72000000", "48000000"]
     countries = [r.upper() for r in q.regions if r.upper() in TED_COUNTRIES]
     if countries:
         run_input["countries"] = countries
@@ -84,6 +88,11 @@ def _ted_map(item: dict[str, Any], q: DiscoveryQuery) -> RawFinding | None:
     title, url = _s(item, "title"), _s(item, "detailUrl")
     if not title or not url:
         return None  # no original source => not usable evidence
+    # Real output uses 'cn-standard' / 'can-standard' (the schema's 'cn' filter value matched
+    # nothing on 2026-11-03), so open calls are selected here: contract notices and PIN-as-CFC.
+    ntype = _s(item, "noticeType") or ""
+    if not (ntype.startswith("cn") or ntype.startswith("pin-cfc")):
+        return None  # awards, corrigenda, etc. are not open demand
     deadline = parse_date(item.get("deadlineDate"))
     if deadline is not None and deadline < datetime.now(UTC):
         return None  # tender already closed
@@ -121,6 +130,9 @@ def _wb_map(item: dict[str, Any], q: DiscoveryQuery) -> RawFinding | None:
     name, url = _s(item, "projectName"), _s(item, "detailUrl")
     if not name or not url:
         return None
+    deadline = parse_date(item.get("submissionDeadlineDate"))
+    if deadline is not None and deadline < datetime.now(UTC):
+        return None  # submission window already closed
     desc = _s(item, "bidDescription")
     contacts: list[RawContact] = []
     cname, cemail = _s(item, "contactName"), _s(item, "contactEmail")

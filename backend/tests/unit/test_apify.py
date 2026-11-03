@@ -226,3 +226,43 @@ def test_registered_provider_is_swappable(approved) -> None:  # type: ignore[no-
 def test_clutch_mapping_is_company_signal_never_partnership() -> None:
     f = SPECS["apify_clutch_agencies"].map_item(load("clutch_items.json")[0], DiscoveryQuery())
     assert f is not None and f.kind is SignalKind.COMPANY_SIGNAL
+
+
+def test_recorded_worldbank_item_has_a_parsed_date_and_is_not_stale() -> None:
+    """Recorded from the real Actor on 2026-11-03: dates look like '15-Oct-2026'."""
+    assert parse_date("15-Oct-2026") is not None and parse_date("15-Oct-2026").year == 2026  # type: ignore[union-attr]
+    item = json.loads(
+        (
+            Path(__file__).parents[1] / "fixtures/apify/worldbank_recorded_2026-11-03.json"
+        ).read_text()
+    )[0]
+    spec = SPECS["apify_worldbank_tenders"]
+    f = spec.map_item(item, DiscoveryQuery())
+    assert f is not None and f.published_at is not None
+    assert f.organization_name == "Bangladesh Public Procurement Authority"
+    item["submissionDeadlineDate"] = "2020-01-01"
+    assert spec.map_item(item, DiscoveryQuery()) is None  # closed windows are skipped
+
+
+def test_ted_cpv_filter_only_used_without_keywords() -> None:
+    spec = SPECS["apify_ted_tenders"]
+    with_kw = spec.build_input(DiscoveryQuery(keywords=["generative AI"]), 20)
+    assert "cpvCodes" not in with_kw and with_kw["keywords"] == "generative AI"
+    assert "cpvCodes" in spec.build_input(DiscoveryQuery(), 20)
+
+
+def test_ted_only_open_calls_are_mapped() -> None:
+    """Field names/values recorded from a real probe on 2026-11-03."""
+    spec = SPECS["apify_ted_tenders"]
+    base = {
+        "title": "Norway – IT services: consulting, software development",
+        "detailUrl": "https://ted.europa.eu/en/notice/-/detail/755731-2026",
+        "publicationDate": "2026-10-30",
+        "deadlineDate": "2099-11-30",
+        "buyerName": "FORSVARSMATERIELL",
+        "buyerCountry": "NOR",
+    }
+    assert "noticeTypes" not in spec.build_input(DiscoveryQuery(keywords=["x"]), 5)
+    f = spec.map_item({**base, "noticeType": "cn-standard"}, DiscoveryQuery())
+    assert f is not None and f.published_at is not None and f.organization_country == "NOR"
+    assert spec.map_item({**base, "noticeType": "can-standard"}, DiscoveryQuery()) is None
