@@ -174,6 +174,81 @@ def test_sam_gov_parse_filters_and_status() -> None:
     assert found[0].deadline is not None
 
 
+def test_supplier_list_dps_selective_and_defence_are_not_actionable() -> None:
+    from app.core.config import Settings
+    from app.services.triage import assess
+
+    s = Settings()
+    base = dict(
+        category="confirmed_demand",
+        org_kind="buyer",
+        source_status="open",
+        deadline=datetime(2099, 1, 1, tzinfo=UTC),
+        budget_text=None,
+        contact_route="buyer@example.com",
+        known_contacts=0,
+        settings=s,
+        source_urls=["https://example.com/notice"],
+    )
+    itq = assess(
+        title="Invitation to Qualify to Artificial Intelligence Source List",
+        text="Establish a pre-qualified list of suppliers for AI services and products.",
+        **base,
+    )
+    assert itq.triage == "needs_verification"
+    assert "qualification" in itq.criteria["external_requirement"]["detail"].lower() or (
+        "source-list" in itq.criteria["external_requirement"]["detail"].lower()
+    )
+    dps = assess(
+        title="Tiedolla johtamisen ja tekoälyn palvelut — AI platforms DPS",
+        text="Dynamic purchasing system (DPS) for artificial intelligence platforms and "
+        "expert services. Actual purchases are made via separate invitations to tender "
+        "inside the DPS.",
+        **base,
+    )
+    assert dps.triage == "needs_verification"
+    sa = assess(
+        title="W7701 Multimodal Data Exploitation",
+        text="RFP against Supply Arrangement for Defence Research and Development Canada "
+        "C4ISR capabilities using artificial intelligence and machine learning.",
+        **base,
+    )
+    assert sa.triage == "needs_verification"
+    national = assess(
+        title="[AI-as-OS] Artificial Intelligence as Operating System",
+        text="National research programme for agent-based artificial intelligence systems.",
+        **base,
+    )
+    assert national.triage == "needs_verification"
+
+
+def test_intake_never_auto_actionable_even_with_complete_fields(session) -> None:  # type: ignore[no-untyped-def]
+    from app.core.config import Settings
+    from app.services.intake import intake_lead
+
+    opp = intake_lead(
+        session,
+        Settings(),
+        "olga",
+        {
+            "source_url": "https://www.reddit.com/r/x/comments/1/need_dev/",
+            "platform": "reddit",
+            "channel": "direct_buyer",
+            "buyer_name": "Founder",
+            "requirement": "Build a RAG chatbot for support docs",
+            "excerpt": "We are looking for a developer to build a RAG chatbot over our docs. "
+            "Budget 5000 USD. Email a@b.example",
+            "published_at": datetime(2026, 10, 20, tzinfo=UTC),
+            "status": "open",
+            "budget_text": "5000 USD",
+            "contact_route": "a@b.example",
+        },
+    )
+    assert opp.triage == "needs_verification"
+    assert opp.verification_status == "unverified"
+    assert opp.status != "qualified"
+
+
 def test_engagement_pipeline(session) -> None:  # type: ignore[no-untyped-def]
     org = Organization(name="Buyer Co", kind=OrganizationKind.BUYER, domain="buyer.example")
     session.add(org)

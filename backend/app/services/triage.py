@@ -48,7 +48,37 @@ _BARRIER = re.compile(
     r"bank guarantee|performance bond)\b",
     re.I,
 )
-_FRAMEWORK = re.compile(r"\b(framework agreement|dynamic purchasing system|DPS|call-?off)\b", re.I)
+_FRAMEWORK = re.compile(
+    r"\b(framework agreement|dynamic purchasing system|DPS|call-?off|"
+    r"dynaamisen hankintajärjestelmän)\b",
+    re.I,
+)
+# Pre-qualification / supplier lists are commercial vehicles, not a discrete project request.
+_SUPPLIER_VEHICLE = re.compile(
+    r"\b(invitation to qualify|\bITQ\b|source list|pre-?qualified (?:list|supplier)s?|"
+    r"supplier list|qualify to (?:the )?artificial intelligence|"
+    r"establish a pre-qualified list)\b",
+    re.I,
+)
+# Selective / supply-arrangement competitions: only already-enrolled suppliers can bid.
+_SELECTIVE_SA = re.compile(
+    r"\b(RFP against (?:a )?supply arrangement|against supply arrangement|"
+    r"supply arrangement|selective tendering|compet(?:e|ed|ition) amongst the pre-qualified)\b",
+    re.I,
+)
+# Defence / military R&D is rarely accessible to an independent civilian specialist team.
+_DEFENCE_RD = re.compile(
+    r"\b(C4ISR|defence research|defense research|military operations|"
+    r"defence research and development|DRDC|weapon|classified)\b",
+    re.I,
+)
+# National-scale AI research programmes / prior-information partnering notices are not
+# discrete $3k–$10k implementation projects for an independent specialist.
+_NATIONAL_AI_RD = re.compile(
+    r"\[AI-as-OS\]|artificial intelligence as operating system|"
+    r"partnering event|vorinformation|prior information notice\b",
+    re.I,
+)
 # AI as the SUBJECT of hardware, research or a survey is not an AI implementation project.
 _NON_SOFTWARE = re.compile(
     r"(–|-)\s*(servers?|machines and apparatus|electricity|construction|medical|pharmaceutical|"
@@ -320,7 +350,15 @@ def assess(
         )
 
     # --- project track ----------------------------------------------------------------------
-    put("external_requirement", "pass", "source is a call / request for external delivery")
+    # Supplier lists / ITQs are not discrete implementation requests.
+    if _SUPPLIER_VEHICLE.search(f"{title}\n{text}"):
+        put(
+            "external_requirement",
+            "unknown",
+            "source is a supplier qualification / source-list vehicle, not a discrete project",
+        )
+    else:
+        put("external_requirement", "pass", "source is a call / request for external delivery")
     status = source_status
     stale_flag = False
     if stale and status == SourceStatus.UNKNOWN and deadline is None:
@@ -348,20 +386,39 @@ def assess(
         put("remote_or_subcontract", "pass", "subcontracting/consortium arrangements mentioned")
     elif _REMOTE.search(text):
         put("remote_or_subcontract", "pass", "remote delivery mentioned")
-    elif _ONSITE.search(text):
+    elif _ONSITE.search(text) or _DEFENCE_RD.search(f"{title}\n{text}"):
         put(
             "remote_or_subcontract",
             "unknown",
-            "on-site delivery mentioned; remote delivery not confirmed",
+            "on-site or defence/military delivery context; remote delivery not confirmed",
         )
     else:
         put("remote_or_subcontract", "unknown", "delivery location/model not stated")
     d_res, d_detail = _deal_size(budget_text, settings)
     put("deal_size", d_res, d_detail)
-    if _BARRIER.search(text):
-        put("procurement_complexity", "fail", "turnover/clearance/guarantee requirements stated")
-    elif _FRAMEWORK.search(text):
-        put("procurement_complexity", "unknown", "framework / purchasing-system access route")
+    full = f"{title}\n{text}"
+    if _BARRIER.search(text) or _DEFENCE_RD.search(full):
+        put(
+            "procurement_complexity",
+            "fail" if _BARRIER.search(text) else "unknown",
+            (
+                "turnover/clearance/guarantee requirements stated"
+                if _BARRIER.search(text)
+                else "defence/military R&D context; supplier eligibility unconfirmed"
+            ),
+        )
+    elif _FRAMEWORK.search(full) or _SELECTIVE_SA.search(full):
+        put(
+            "procurement_complexity",
+            "unknown",
+            "framework / DPS / selective supply-arrangement access route — not a discrete open bid",
+        )
+    elif _NATIONAL_AI_RD.search(full):
+        put(
+            "procurement_complexity",
+            "unknown",
+            "national-scale AI research programme or prior-information/partnering notice",
+        )
     else:
         put("procurement_complexity", "pass", "no complexity barrier stated in the source")
     put(
@@ -412,11 +469,25 @@ def assess(
         )
 
     hard_fail = [k for k, v in crit.items() if v["result"] == "fail"]
+    # A discrete, accessible project: not a supplier list, DPS, or selective SA.
+    complexity_detail = crit.get("procurement_complexity", {}).get("detail", "").lower()
+    vehicle_blocks_actionable = crit.get("external_requirement", {}).get("result") != "pass" or any(
+        marker in complexity_detail
+        for marker in (
+            "framework",
+            "dps",
+            "selective",
+            "defence/military",
+            "national-scale",
+            "partnering",
+            "prior-information",
+        )
+    )
     core_ok = all(
         crit[k]["result"] == "pass"
         for k in ("external_requirement", "active", "scope", "contact_route")
     )
-    if core_ok and not hard_fail:
+    if core_ok and not hard_fail and not vehicle_blocks_actionable:
         reasons.append("relevant, open, external requirement with a buyer contact route")
         nxt = (
             "Open the notice, check eligibility and size, then decide whether to apply"
@@ -426,6 +497,11 @@ def assess(
         return Assessment(relevance, Triage.ACTIONABLE, None, a_info, crit, missing, reasons, nxt)
     if hard_fail:
         reasons.append("failed: " + ", ".join(hard_fail))
+    if vehicle_blocks_actionable:
+        reasons.append(
+            "not a discrete commercially accessible project bid for an independent team "
+            "(supplier list, DPS/framework, selective SA, or defence context)"
+        )
     reasons.append(
         "unconfirmed: " + ", ".join(k for k, v in crit.items() if v["result"] == "unknown")
     )
@@ -439,19 +515,20 @@ def assess_opportunity(
     session: Session, opp: Opportunity, settings: Settings, ai: AiSignal | None = None
 ) -> Assessment:
     rows = session.execute(
-        select(Evidence.original_text, Evidence.source_url)
+        select(Evidence.original_text, Evidence.source_url, Evidence.provider)
         .join(OpportunityEvidence, OpportunityEvidence.evidence_id == Evidence.id)
         .where(OpportunityEvidence.opportunity_id == opp.id)
     ).all()
     texts = [r[0] for r in rows]
     urls = [r[1] for r in rows]
+    providers = [r[2] for r in rows]
     org = session.get(Organization, opp.organization_id) if opp.organization_id else None
     contacts = (
         len(session.execute(select(Contact.id).where(Contact.organization_id == org.id)).all())
         if org
         else 0
     )
-    return assess(
+    a = assess(
         title=opp.title,
         text="\n".join(texts),
         category=opp.category,
@@ -467,6 +544,26 @@ def assess_opportunity(
         stale=opp.verification_status == VerificationStatus.STALE,
         ai=ai,
     )
+    # Manual intake stays capped until a human verifies the original source.
+    manual_only = bool(providers) and all(p == "manual_intake" for p in providers)
+    if (
+        manual_only
+        and a.triage is Triage.ACTIONABLE
+        and opp.verification_status != VerificationStatus.VERIFIED
+    ):
+        a.triage = Triage.NEEDS_VERIFICATION
+        a.reasons = [
+            *a.reasons,
+            "manual intake: human verification of the original source is required",
+        ]
+        a.next_action = (
+            "Verify the original post yourself, then mark the opportunity verified"
+        )
+        a.missing = [
+            *a.missing,
+            "verification: operator-supplied excerpt is not independent confirmation",
+        ]
+    return a
 
 
 def apply_assessment(opp: Opportunity, a: Assessment) -> dict[str, Any]:

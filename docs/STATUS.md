@@ -1,22 +1,23 @@
 # Personal AI GTM — Product Status
 
-Last audited: 2026-11-03 against local HEAD `f0a9dd7` plus uncommitted WIP (Apify reconcile, manual intake, triage budget parsing).
+Last audited: 2026-11-03. Pre-push validation commit follows `8d896ef`.
 
 Paid providers remain **disabled by default**. No paid experiment was executed for this status update.
 
 ## Live baseline (real DB, not fixtures)
 
+Re-validated before push. After false-positive gates (ITQ / DPS / selective SA / defence / national AI R&D) and manual-intake caps:
+
 | Metric | Value |
 |---|---|
-| Opportunities | 142 |
-| Actionable (direct buyer) | 5 |
-| Needs verification | 13 |
-| Rejected | 124 |
-| Agency verified partnership | 2 (needs verification) |
-| Deals / interactions | 0 / 0 |
-| Source candidates | 54 (1 signal, 34 no_signal) |
-| Apify intent spend | ~$0.07 → 1 stored record |
-| OpenAI spend | ~$0.24 |
+| Opportunities (post free rediscovery) | ~103 |
+| **Corrected real actionable** | **1** (DE tourist KI-Chatbot lot; bidder eligibility still human-check) |
+| Mock actionable | 1 (excluded from lead counts) |
+| Needs verification | ~19 |
+| Rejected | ~82 |
+| Deals / interactions | Exercised on authenticated API + dashboard proxy |
+
+Previously reported “5 actionable” included Canada AI Source List (ITQ), Canada C4ISR (selective SA + defence), Finland DigiFinland DPS, a test manual intake, and the DE chatbot. All but the DE chatbot were downgraded; evidence retained.
 
 Dominant providers by volume: World Bank, TED, UK Find a Tender. High retrieval, high reject rate (not_relevant / closed / awarded).
 

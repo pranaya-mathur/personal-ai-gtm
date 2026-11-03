@@ -53,3 +53,6 @@
 49. **Manual intake** is the permitted path for LinkedIn/Reddit/Facebook content the operator may copy; automated collection of those platforms stays disabled (`docs/SOURCE_ACCESS.md`).
 50. **Engagement pipeline** uses existing `deals`/`interactions` tables with API + dashboard. Mark-sent records manual transmission of approved drafts; nothing is auto-sent.
 51. **Apify post-submit transport errors** raise `ProviderRunPending` with the run id annotated on the reservation (`f0a9dd7` + reconcile CLI). The Actor is never re-submitted.
+52. **Manual intake cannot become actionable** until human verification. `assess_opportunity` and `intake_lead` cap `manual_intake` records at `needs_verification`; category may still be `confirmed_demand` from stated text, but triage never claims actionable demand from a pasted excerpt alone.
+53. **Actionable excludes non-discrete vehicles**: ITQ/source lists, DPS/frameworks, selective supply arrangements, defence/military R&D, and national-scale AI research / prior-information partnering notices stay `needs_verification` (evidence retained).
+54. **Integration tests refuse to wipe non-test databases**. `TEST_DATABASE_URL` must name a DB containing `test` (e.g. `gtm_test`); the shared `gtm` database is never `DROP SCHEMA`'d by pytest.

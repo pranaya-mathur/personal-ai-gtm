@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.connectors.base import RawFinding, RawRoute, SignalKind
 from app.core.config import Settings
 from app.models import Opportunity, Qualification
+from app.models.enums import OpportunityStatus, Triage
 from app.services.ingest import ingest_finding
 from app.services.routes import route_kind
 from app.services.triage import apply_assessment, assess_opportunity
@@ -68,6 +69,26 @@ def intake_lead(
     opp = session.get(Opportunity, out.opportunity_id)
     assert opp is not None
     previous = apply_assessment(opp, assess_opportunity(session, opp, settings))
+    # Operator-supplied text is not independent verification. Policy: intake never yields
+    # confirmed actionable demand until a human verifies the original source.
+    if opp.triage == Triage.ACTIONABLE:
+        opp.triage = Triage.NEEDS_VERIFICATION
+        if opp.status == OpportunityStatus.QUALIFIED:
+            opp.status = OpportunityStatus.NEW
+    assessment = dict(opp.assessment or {})
+    assessment["intake_cap"] = (
+        "actionable suppressed until human verification of the original source"
+    )
+    reasons = list(assessment.get("reasons") or [])
+    note = "manual intake: human verification required before actionable"
+    if note not in reasons:
+        reasons.append(note)
+    assessment["reasons"] = reasons
+    if opp.triage != Triage.REJECTED:
+        assessment["next_action"] = (
+            "Verify the original post yourself, then mark the opportunity verified"
+        )
+    opp.assessment = assessment
     session.add(
         Qualification(
             opportunity_id=opp.id,
@@ -82,12 +103,14 @@ def intake_lead(
                     "delivery_suitability": (data.get("delivery_suitability") or "").strip()
                     or None,
                     "reviewer_verification": "unverified",
+                    "actionable_capped": True,
                 },
                 "previous": previous,
             },
             rationale=(
                 f"manual intake by {who} from {platform}; "
-                "content is as supplied, not independently verified"
+                "content is as supplied, not independently verified; "
+                "capped pending human verification"
             ),
         )
     )

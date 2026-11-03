@@ -19,6 +19,13 @@ TOKENS = f"alice:admin:{ADMIN},olga:operator:{OPERATOR},victor:viewer:{VIEWER}"
 
 @pytest.fixture
 def client(pg_url, monkeypatch):  # type: ignore[no-untyped-def]
+    # Hard guard: never wipe a database whose name is not clearly a test DB.
+    db_name = pg_url.rsplit("/", 1)[-1].split("?", 1)[0]
+    if not db_name.endswith("_test") and "test" not in db_name:
+        pytest.fail(
+            f"Refusing to DROP SCHEMA on {db_name!r}. Point TEST_DATABASE_URL at a "
+            "dedicated database whose name contains 'test' (e.g. gtm_test)."
+        )
     monkeypatch.setenv("DATABASE_URL", pg_url)
     monkeypatch.setenv("API_TOKENS", TOKENS)
     from app.core.config import get_settings

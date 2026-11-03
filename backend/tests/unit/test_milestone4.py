@@ -1109,10 +1109,13 @@ def test_intake_stores_a_separate_unverified_record_with_exactly_what_was_suppli
         and meta["reviewer_verification"] == "unverified"
     )
     assert meta["delivery_suitability"] == "remote OK, small scope"
-    assert opp.triage in (
-        "actionable",
-        "needs_verification",
-    )  # judged by the same rules as automatic leads
+    # Even a complete pasted request stays capped: human verification is mandatory.
+    assert opp.triage == "needs_verification"
+    assert meta["actionable_capped"] is True
+    assert meta["reviewer_verification"] == "unverified"
+    assert opp.verification_status == "unverified"
+    assert opp.status != "qualified"
+    assert "manual intake" in " ".join(opp.assessment.get("reasons") or [])
 
 
 def test_intake_does_not_fabricate_missing_fields(session) -> None:  # type: ignore[no-untyped-def]
