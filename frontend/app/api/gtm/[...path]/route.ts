@@ -26,12 +26,17 @@ async function forward(req: NextRequest, path: string[]): Promise<NextResponse> 
   if (!["GET", "POST", "PATCH"].includes(req.method)) {
     return NextResponse.json({ detail: "method not allowed" }, { status: 405 });
   }
-  const res = await fetch(`${API}/${target}${req.nextUrl.search}`, {
-    method: req.method,
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: ["POST", "PATCH"].includes(req.method) ? await req.text() : undefined,
-    cache: "no-store",
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${API}/${target}${req.nextUrl.search}`, {
+      method: req.method,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: ["POST", "PATCH"].includes(req.method) ? await req.text() : undefined,
+      cache: "no-store",
+    });
+  } catch {
+    return NextResponse.json({ detail: "API unreachable" }, { status: 502 });
+  }
   return new NextResponse(await res.text(), {
     status: res.status,
     headers: { "content-type": res.headers.get("content-type") ?? "application/json" },

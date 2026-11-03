@@ -82,6 +82,12 @@ describe("dashboard proxy security", () => {
     expect(r.status).toBe(401);
     expect(sent).toHaveLength(0);
   });
+  it("an unreachable API yields a clean 502, never a 500 or a leaked error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("ECONNREFUSED 10.0.0.5"); }));
+    const r = await POST(req("POST", `drafts/${ID}/approve`, { "x-gtm-action": "1", authorization: ADM }), ctx(`drafts/${ID}/approve`));
+    expect(r.status).toBe(502);
+    expect(JSON.stringify(await r.json())).not.toContain("10.0.0.5");
+  });
   it("dashboard login fails closed without a password and rejects wrong credentials", () => {
     const mk = (auth?: string) => new NextRequest("http://dash.local/", { headers: auth ? { authorization: auth } : {} });
     delete process.env.DASHBOARD_PASSWORD;
