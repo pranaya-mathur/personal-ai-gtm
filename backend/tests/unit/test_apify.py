@@ -85,7 +85,7 @@ def test_ted_maps_only_valid_open_notices(approved: Settings) -> None:
     assert post.url.path == "/v2/acts/foxlabs~ted-tenders/runs"
     assert post.headers["authorization"] == "Bearer test-token"
     body = json.loads(post.content)
-    assert body["noticeTypes"] == ["cn", "pin-cfc-standard"]
+    assert "noticeTypes" not in body  # open calls are selected when mapping
     assert body["countries"] == ["DEU"]  # unsupported region dropped, not guessed
     assert body["keywords"] == "AI, machine learning" and body["maxResults"] == 50
     assert float(post.url.params["maxTotalChargeUsd"]) <= approved.spend_limit_per_run_usd
