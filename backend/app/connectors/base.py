@@ -95,3 +95,8 @@ class DiscoveryConnector(Protocol):
 
 class ConnectorError(Exception):
     """Raised by connectors for provider failures (retried by the runner)."""
+
+
+class ConnectorRejected(ConnectorError):
+    """The provider refused the request before doing any work (4xx on submit). Nothing was
+    billed, so any reserved spend is released and the call is not retried."""

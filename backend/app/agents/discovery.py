@@ -1,10 +1,17 @@
 import uuid
 
 from sqlalchemy.orm import Session
-from tenacity import Retrying, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    Retrying,
+    retry_if_exception_type,
+    retry_if_not_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from app.connectors.base import (
     ConnectorError,
+    ConnectorRejected,
     DiscoveryConnector,
     DiscoveryQuery,
     DiscoveryResult,
@@ -50,7 +57,8 @@ class _DiscoveryAgent:
         """Each attempt reserves its own worst-case cost before it can spend anything; a failed
         attempt keeps its reservation (a provider may bill a run that errored)."""
         for attempt in Retrying(
-            retry=retry_if_exception_type(ConnectorError),
+            retry=retry_if_exception_type(ConnectorError)
+            & retry_if_not_exception_type(ConnectorRejected),
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=0.5, max=8),
             reraise=True,
@@ -70,7 +78,14 @@ class _DiscoveryAgent:
                     reservation = self.spend.reserve(est, run_id, family, ledger_name, "discovery")
                 else:
                     self.spend.check(0.0, run_id, family)
-                result = connector.discover(query)
+                try:
+                    result = connector.discover(query)
+                except ConnectorRejected:
+                    if reservation is not None:
+                        self.spend.settle(
+                            reservation, 0.0
+                        )  # refused before any work: nothing billed
+                    raise
                 if reservation is not None:
                     self.spend.settle(reservation, result.actual_cost_usd)
                 return result

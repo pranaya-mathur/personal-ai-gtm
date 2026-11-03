@@ -812,3 +812,32 @@ def test_apify_intent_runs_two_engines_caps_each_run_and_reads_only_stated_reque
     assert res.actual_cost_usd == pytest.approx(
         4 * 0.0123
     )  # the provider-reported usage, not the estimate
+
+
+def test_provider_rejection_releases_the_reservation_and_is_not_retried(session) -> None:  # type: ignore[no-untyped-def]
+    from pydantic import SecretStr
+
+    from app.agents.discovery import OpportunityIntelligenceAgent
+    from app.connectors.apify_client import ApifyClient
+    from app.connectors.intent_sources import ApifySearchIntentConnector
+    from app.models import ProviderSpend
+    from app.services.spend import SpendGuard
+
+    calls = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(400, json={"error": {"type": "max-total-charge-usd-below-minimum"}})
+
+    s = Settings(
+        database_url="sqlite://", apify_paid_execution_approved=True, apify_test_budget_usd=0.25
+    )
+    c = ApifySearchIntentConnector(
+        s, ApifyClient(SecretStr("t"), transport=httpx.MockTransport(handler), poll_seconds=0), None
+    )
+    agent = OpportunityIntelligenceAgent(session, [c], SpendGuard(session, s))
+    out = agent.run(DiscoveryQuery(), None)
+    assert calls["n"] == 1  # a 4xx is final: no retries
+    assert out["errors"] and "rejected" in out["errors"][0].lower()
+    spent = [float(r.amount_usd) for r in session.execute(select(ProviderSpend)).scalars()]
+    assert spent == [0.0]  # nothing was billed, so nothing stays reserved

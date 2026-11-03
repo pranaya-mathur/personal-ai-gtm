@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
-from app.connectors.base import ConnectorError
+from app.connectors.base import ConnectorError, ConnectorRejected
 
 TERMINAL_OK = "SUCCEEDED"
 TERMINAL_BAD = {"FAILED", "ABORTED", "TIMED-OUT"}
@@ -46,13 +46,14 @@ class ApifyClient:
     ) -> dict[str, Any]:
         path = f"/v2/acts/{actor_id.replace('/', '~')}/runs"
         try:
-            run = self._json(
-                self._http.post(
-                    path,
-                    params={"maxTotalChargeUsd": f"{max_total_charge_usd:.4f}"},
-                    json=run_input,
-                )
-            )["data"]
+            submit = self._http.post(
+                path,
+                params={"maxTotalChargeUsd": f"{max_total_charge_usd:.4f}"},
+                json=run_input,
+            )
+            if 400 <= submit.status_code < 500:
+                raise ConnectorRejected(f"Apify rejected the run: {submit.text[:240]}")
+            run = self._json(submit)["data"]
             deadline = time.monotonic() + self._max_wait
             while run["status"] not in {TERMINAL_OK, *TERMINAL_BAD}:
                 if time.monotonic() > deadline:
