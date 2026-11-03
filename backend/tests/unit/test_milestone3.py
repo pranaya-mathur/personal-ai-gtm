@@ -296,7 +296,7 @@ def test_zero_repair_budget_means_single_attempt(session) -> None:  # type: igno
     llm.handlers[S.OpportunityDossier] = lambda n, u: S.OpportunityDossier(
         summary="s", requirements=[S.Claim(text="t", evidence_id="x", quote="not in evidence")],
         budget=None, deadline=None, ai_project="none", ai_project_support=None,
-        verdict="supported", reliability=0.5, findings=[], open_questions=[], fit_score=1, risks=[],
+        verdict="supported", reliability=0.5, findings=[], open_questions=[], fit_score=1, risks=[], external_delivery="unclear", small_team_fit="unclear", suggested_next_action="x",  # noqa: E501
     )  # fmt: skip
     assert (
         _dossier_task(gateway(session, live(ai_max_repair_attempts=0), llm), session, opp) is None
@@ -317,7 +317,7 @@ def test_per_record_call_allowance_stops_excessive_calls(session) -> None:  # ty
     llm.handlers[S.OpportunityDossier] = lambda n, u: S.OpportunityDossier(
         summary="s", requirements=[S.Claim(text="t", evidence_id="x", quote="not in evidence")],
         budget=None, deadline=None, ai_project="none", ai_project_support=None,
-        verdict="supported", reliability=0.5, findings=[], open_questions=[], fit_score=1, risks=[],
+        verdict="supported", reliability=0.5, findings=[], open_questions=[], fit_score=1, risks=[], external_delivery="unclear", small_team_fit="unclear", suggested_next_action="x",  # noqa: E501
     )  # fmt: skip
     gw = gateway(session, live(ai_max_calls_per_record=1, ai_max_repair_attempts=3), llm)
     with pytest.raises(RecordBudgetExceeded):
@@ -350,7 +350,7 @@ def test_one_invalid_response_does_not_fail_the_workflow_or_other_records(sessio
             return S.OpportunityDossier(
                 summary="s", requirements=[S.Claim(text="t", evidence_id="x", quote="never in text")],  # noqa: E501
                 budget=None, deadline=None, ai_project="none", ai_project_support=None,
-                verdict="supported", reliability=0.5, findings=[], open_questions=[], fit_score=1, risks=[],  # noqa: E501
+                verdict="supported", reliability=0.5, findings=[], open_questions=[], fit_score=1, risks=[], external_delivery="unclear", small_team_fit="unclear", suggested_next_action="x",  # noqa: E501
             )  # fmt: skip
         return MockLLM().complete_structured("", u, S.OpportunityDossier, 10).parsed
 

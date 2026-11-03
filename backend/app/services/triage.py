@@ -28,6 +28,7 @@ from app.models.enums import (
     SourceStatus,
     TechnicalRelevance,
     Triage,
+    VerificationStatus,
 )
 
 # Short acronyms must be written in capitals (Italian/Finnish "ai", English "rag" are common words).
@@ -48,6 +49,22 @@ _BARRIER = re.compile(
     re.I,
 )
 _FRAMEWORK = re.compile(r"\b(framework agreement|dynamic purchasing system|DPS|call-?off)\b", re.I)
+# AI as the SUBJECT of hardware, research or a survey is not an AI implementation project.
+_NON_SOFTWARE = re.compile(
+    r"(–|-)\s*(servers?|machines and apparatus|electricity|construction|medical|pharmaceutical|"
+    r"furniture|vehicles?|catering|cleaning|printing|public relations|survey services|"
+    r"laboratory|building|real estate|food|energy)\b",
+    re.I,
+)
+_HIRING = re.compile(
+    r"\b(recruit\w*|recrutement|hiring|vacanc\w+|job opening|individual consultant|"
+    r"full-?time (?:employee|position)|chief [\w &-]{0,30} officer|salary)\b",
+    re.I,
+)
+_STUDY_SUBJECT = re.compile(
+    r"\b(survey|study|evaluation|assessment|impact|use of|research on|attitudes)\b", re.I
+)
+_AMBIGUOUS_TERMS = {"rag"}  # also a company name / common word: never enough on its own
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _AMOUNT = re.compile(r"(\d[\d.,]*)\s*([A-Za-z]{3})?")
 _CURRENCIES = {"EUR", "USD", "GBP"}  # compared numerically; anything else stays unknown
@@ -74,6 +91,7 @@ class AiSignal:
 
     ai_project: str | None = None  # explicit | implied | none
     verdict: str | None = None  # supported | partially_supported | unsupported
+    external_delivery: str | None = None  # permitted | not_permitted | unclear
 
 
 @dataclass
@@ -98,26 +116,44 @@ class Assessment:
         }
 
 
-def stage_a(title: str, text: str, terms: list[str]) -> tuple[TechnicalRelevance, dict[str, Any]]:
-    in_title = find_terms(title, terms)
-    body = text
-    hits = find_terms(f"{title}\n{body}", terms)
+def stage_a(
+    title: str, text: str, terms: list[str], org_name: str | None = None
+) -> tuple[TechnicalRelevance, dict[str, Any]]:
+    if org_name:  # a company called "RAG AG" is not a RAG project
+        text = text.replace(org_name, " ")
+        title = title.replace(org_name, " ")
+    hits = find_terms(f"{title}\n{text}", terms)
     distinct = sorted({t for t, _ in hits})
-    info: dict[str, Any] = {"terms": distinct, "in_title": [t for t, _ in in_title]}
-    if not distinct:
-        info["why"] = "no AI term in the source text"
+    strong = [t for t in distinct if t not in _AMBIGUOUS_TERMS]
+    info: dict[str, Any] = {"terms": distinct, "in_title": [t for t, _ in find_terms(title, terms)]}
+    if not strong:
+        info["why"] = (
+            "only an ambiguous acronym matched" if distinct else "no AI term in the source text"
+        )
         return TechnicalRelevance.NOT_RELEVANT, info
+    if non_software := _NON_SOFTWARE.search(title):
+        info["why"] = f"category {non_software.group(0).strip(' -–')!r} is not software/AI services"
+        return TechnicalRelevance.NOT_RELEVANT, info
+    if _HIRING.search(title) or _HIRING.search(text[:300]):
+        info["why"] = "an individual hire / recruitment, not an outsourced AI project"
+        info["hiring"] = True
+        return TechnicalRelevance.NOT_RELEVANT, info
+    in_title = [t for t, _ in find_terms(title, terms) if t not in _AMBIGUOUS_TERMS]
+    if _STUDY_SUBJECT.search(title) and in_title:
+        info["why"] = "AI is the subject of a study/survey, not something to be built"
+        return TechnicalRelevance.UNCLEAR, info
     if in_title:
         info["why"] = "AI term in the notice title"
         return TechnicalRelevance.RELEVANT, info
-    # a term used with an implementation verb in a sentence-sized window, and not in a tech list
-    full = f"{title}\n{body}"
+    full = f"{title}\n{text}"
     for term, pos in hits:
+        if term in _AMBIGUOUS_TERMS:
+            continue
         window = full[max(0, pos - 80) : pos + len(term) + 80]
         if _IMPLEMENTATION.search(window) and window.count(",") < 3:
             info["why"] = f"{term!r} appears with an implementation verb"
             return TechnicalRelevance.RELEVANT, info
-    if len(distinct) >= 2:
+    if len(strong) >= 2:
         info["why"] = "several distinct AI terms"
         return TechnicalRelevance.RELEVANT, info
     info["why"] = "AI is mentioned (possibly in a list) but no AI implementation is described"
@@ -185,12 +221,16 @@ def assess(
     known_contacts: int,
     settings: Settings,
     source_urls: list[str] | None = None,
+    org_name: str | None = None,
+    stale: bool = False,
     ai: AiSignal | None = None,
     now: datetime | None = None,
 ) -> Assessment:
     now = now or datetime.now(UTC)
+    if deadline is not None and deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=UTC)  # SQLite returns naive datetimes
     route_ok = valid_route(contact_route, source_urls or []) or bool(known_contacts)
-    relevance, a_info = stage_a(title, text, settings.topic_term_list)
+    relevance, a_info = stage_a(title, text, settings.topic_term_list, org_name)
     a_info["source"] = "deterministic"
     if ai is not None:
         if relevance is TechnicalRelevance.UNCLEAR and ai.ai_project == "explicit":
@@ -256,6 +296,9 @@ def assess(
     # --- project track ----------------------------------------------------------------------
     put("external_requirement", "pass", "source is a call / request for external delivery")
     status = source_status
+    stale_flag = False
+    if stale and status == SourceStatus.UNKNOWN and deadline is None:
+        status, stale_flag = SourceStatus.CLOSED, True  # undated/old source with no open deadline
     if status == SourceStatus.UNKNOWN and deadline is not None:
         status = SourceStatus.OPEN if deadline > now else SourceStatus.CLOSED
     if status == SourceStatus.OPEN:
@@ -269,7 +312,13 @@ def assess(
         {"relevant": "pass", "unclear": "unknown", "not_relevant": "fail"}[str(relevance)],
         a_info["why"],
     )
-    if _SUBCONTRACT.search(text):
+    if ai is not None and ai.external_delivery == "not_permitted":
+        put(
+            "remote_or_subcontract",
+            "fail",
+            "AI read the source as not allowing external delivery (verify; AI cannot reject alone)",
+        )
+    elif _SUBCONTRACT.search(text):
         put("remote_or_subcontract", "pass", "subcontracting/consortium arrangements mentioned")
     elif _REMOTE.search(text):
         put("remote_or_subcontract", "pass", "remote delivery mentioned")
@@ -314,10 +363,14 @@ def assess(
     reasons: list[str] = []
     codes: list[str] = []
     if status in (SourceStatus.CLOSED, SourceStatus.AWARDED):
-        codes.append(str(status))
-        reasons.append(f"opportunity is {status}")
+        codes.append("stale" if stale_flag else str(status))
+        reasons.append(
+            "source is older than the freshness window and states no open deadline"
+            if stale_flag
+            else f"opportunity is {status}"
+        )
     if relevance is TechnicalRelevance.NOT_RELEVANT:
-        codes.append("not_relevant")
+        codes.append("hiring_post" if a_info.get("hiring") else "not_relevant")
         reasons.append("source text describes no AI work")
     reason = ",".join(codes) or None
     if reason is not None:
@@ -376,7 +429,7 @@ def assess_opportunity(
         title=opp.title,
         text="\n".join(texts),
         category=opp.category,
-        org_kind=org.kind if org else None,
+        org_kind="agency" if opp.channel == "agency" else (org.kind if org else None),
         source_status=opp.source_status,
         deadline=opp.deadline,
         budget_text=opp.budget_text,
@@ -384,6 +437,8 @@ def assess_opportunity(
         known_contacts=contacts,
         settings=settings,
         source_urls=urls,
+        org_name=org.name if org else None,
+        stale=opp.verification_status == VerificationStatus.STALE,
         ai=ai,
     )
 

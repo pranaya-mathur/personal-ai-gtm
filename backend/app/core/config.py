@@ -19,6 +19,16 @@ class Settings(BaseSettings):
     api_rate_limit_per_minute: int = 300
     api_mutation_limit_per_minute: int = 30
 
+    # Free, keyless discovery. Keywords drive the official-API connectors (TED, World Bank).
+    discovery_keywords: str = (
+        "artificial intelligence,machine learning,generative AI,chatbot,large language model,"
+        "retrieval-augmented generation,AI agent,document processing,intelligent automation"
+    )
+    enabled_discoverers: str = ""  # e.g. "wikidata,github": automatic candidate discovery (network)
+    candidates_per_run: int = 15  # candidate domains read per run
+    brave_api_key: SecretStr | None = None
+    search_discovery_enabled: bool = False  # Brave queries only when explicitly turned on
+
     enabled_connectors: str = "mock_opportunities,mock_agencies"
 
     spend_limit_per_run_usd: float = 1.00
@@ -89,6 +99,14 @@ class Settings(BaseSettings):
 
     worker_poll_interval_seconds: float = 2.0
     worker_max_attempts: int = 3
+
+    @property
+    def discovery_keyword_list(self) -> list[str]:
+        return [k.strip() for k in self.discovery_keywords.split(",") if k.strip()]
+
+    @property
+    def enabled_discoverer_list(self) -> list[str]:
+        return [k.strip() for k in self.enabled_discoverers.split(",") if k.strip()]
 
     @property
     def agency_seed_list(self) -> list[str]:

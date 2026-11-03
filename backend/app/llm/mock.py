@@ -68,6 +68,9 @@ class MockLLM:
                 open_questions=["Budget and timeline are not stated."],
                 fit_score=70.0,
                 risks=["[MOCK] unverified beyond the cited source"],
+                external_delivery="unclear",
+                small_team_fit="unclear",
+                suggested_next_action="[MOCK] read the source and confirm eligibility",
             )
         elif schema is S.QualificationAssessment:
             out = S.QualificationAssessment(

@@ -7,7 +7,14 @@ from sqlalchemy.orm import Session
 
 from app.connectors.base import RawFinding, SignalKind
 from app.core.logging import get_logger
-from app.models import Contact, Evidence, Opportunity, OpportunityEvidence, Organization
+from app.models import (
+    Contact,
+    ContactRoute,
+    Evidence,
+    Opportunity,
+    OpportunityEvidence,
+    Organization,
+)
 from app.models.enums import (
     OpportunityCategory,
     OpportunityStatus,
@@ -20,6 +27,7 @@ from app.services.dedupe import (
     opportunity_dedupe_key,
     title_similarity,
 )
+from app.services.routes import route_kind
 from app.utils import utcnow
 
 log = get_logger(__name__)
@@ -86,6 +94,41 @@ def validate_finding(finding: RawFinding) -> str | None:
     return None
 
 
+def _store_routes(
+    session: Session, opp: Opportunity, org: Organization | None, finding: RawFinding
+) -> None:
+    """Persist published routes once each. The finding's own source page is not a route."""
+    candidates: list[tuple[str, str, str | None, str | None]] = (
+        [(route_kind(finding.contact_route), finding.contact_route, None, None)]
+        if (
+            finding.contact_route
+            and finding.contact_route.rstrip("/") != finding.source_url.rstrip("/")
+        )
+        else []
+    )
+    candidates += [(r.kind, r.value, r.role, r.snippet) for r in finding.routes]
+    for kind, value, role, snippet in candidates:
+        exists = session.execute(
+            select(ContactRoute.id).where(
+                ContactRoute.opportunity_id == opp.id,
+                ContactRoute.kind == kind,
+                ContactRoute.value == value,
+            )
+        ).first()
+        if exists is None:
+            session.add(
+                ContactRoute(
+                    opportunity_id=opp.id,
+                    organization_id=org.id if org else None,
+                    kind=kind,
+                    value=value,
+                    role=role,
+                    source_url=finding.source_url,
+                    snippet=snippet,
+                )
+            )
+
+
 def ingest_finding(
     session: Session,
     finding: RawFinding,
@@ -145,6 +188,9 @@ def ingest_finding(
             organization_id=org.id if org else None,
             confidence=finding.provider_confidence,
             dedupe_key=key,
+            channel="agency"
+            if finding.kind is SignalKind.PARTNER_ACTIVITY or org_kind == OrganizationKind.AGENCY
+            else "direct_buyer",
             source_status=finding.source_status,
             deadline=finding.deadline,
             budget_text=finding.budget_text,
@@ -172,6 +218,7 @@ def ingest_finding(
     if linked is None:
         session.add(OpportunityEvidence(opportunity_id=opp.id, evidence_id=evidence.id))
 
+    _store_routes(session, opp, org, finding)
     if org is not None:
         for c in finding.contacts:
             exists = session.execute(

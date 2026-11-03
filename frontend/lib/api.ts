@@ -68,10 +68,60 @@ export interface BoardRow {
   stage_b: Record<string, { result: string; detail: string }>;
   view: RecordView;
   evidence_excerpt: string | null;
+  channel: "agency" | "direct_buyer";
+  project_type: string;
+  budget_value: number | null;
+  budget_currency: string | null;
+  age_days: number | null;
+  routes: { kind: string; value: string; role: string | null; source_url: string }[];
+  ai_next_action: string | null;
+  small_team_fit: string | null;
+  external_delivery: string | null;
+}
+
+export interface RouteRow {
+  kind: string; value: string; role: string | null; source_url: string; opportunity_id: string;
+  opportunity: string; organization: string | null; country: string | null; channel: string;
+  triage: string; view: string; next_action: string; is_mock: boolean;
+}
+
+export interface SourcePerformance {
+  sources: {
+    source: string; is_mock: boolean; records: number; actionable: number; needs_verification: number;
+    rejected: number; false_positives: number; expired_or_awarded: number;
+    missing_contact_route: number; cost_usd: number;
+  }[];
+  candidates: Record<string, Record<string, number>>;
+}
+
+export interface Filters {
+  country: string; projectType: string; channel: string; triage: string;
+  minBudget: string; maxBudget: string; maxAgeDays: string;
+}
+export const NO_FILTERS: Filters = {
+  country: "", projectType: "", channel: "", triage: "", minBudget: "", maxBudget: "", maxAgeDays: "",
+};
+
+/** Client-side filters. A budget filter excludes records whose budget is unknown (unknown != 0). */
+export function applyFilters(rows: BoardRow[], f: Filters): BoardRow[] {
+  const min = f.minBudget === "" ? null : Number(f.minBudget);
+  const max = f.maxBudget === "" ? null : Number(f.maxBudget);
+  const age = f.maxAgeDays === "" ? null : Number(f.maxAgeDays);
+  return rows.filter((r) => {
+    if (f.country && !(r.country ?? "").toLowerCase().includes(f.country.toLowerCase())) return false;
+    if (f.projectType && r.project_type !== f.projectType) return false;
+    if (f.channel && r.channel !== f.channel) return false;
+    if (f.triage && r.triage !== f.triage) return false;
+    if ((min !== null || max !== null) && r.budget_value === null) return false;
+    if (min !== null && r.budget_value !== null && r.budget_value < min) return false;
+    if (max !== null && r.budget_value !== null && r.budget_value > max) return false;
+    if (age !== null && (r.age_days === null || r.age_days > age)) return false;
+    return true;
+  });
 }
 
 export type RecordView =
-  | "active_project" | "needs_verification" | "verified_partnership"
+  | "active_project" | "agency_seeking" | "needs_verification" | "verified_partnership"
   | "potential_partner" | "rejected" | "unqualified_signal";
 
 export interface CostSummary {
@@ -99,7 +149,7 @@ export interface Analysis {
   output: Record<string, unknown> | null;
 }
 
-export const TOTAL_NODES = 9;
+export const TOTAL_NODES = 11;
 
 export interface Evidence {
   id: string;
@@ -210,6 +260,8 @@ export const api = {
   aiUsage: () => request<AiUsage>("/ai/usage"),
   connectors: () => request<Connector[]>("/connectors"),
   board: () => request<BoardRow[]>("/board"),
+  routes: () => request<RouteRow[]>("/routes"),
+  sources: () => request<SourcePerformance>("/sources/performance"),
   costs: () => request<CostSummary>("/costs"),
   cancelRun: (id: string) => request<Run>(`/runs/${id}/cancel`, { method: "POST" }),
   opportunity: (id: string) => request<OpportunityDetail>(`/opportunities/${id}`),

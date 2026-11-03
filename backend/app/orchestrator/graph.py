@@ -19,21 +19,28 @@ from app.agents.qualification import QualificationAgent
 from app.agents.research import ResearchEvidenceAgent
 from app.ai.gateway import LLMGateway
 from app.ai.tasks import AITasks
-from app.connectors.base import DiscoveryConnector, DiscoveryQuery
+from app.connectors.agencies import PartnerPageChecker
+from app.connectors.base import ConnectorError, DiscoveryConnector, DiscoveryQuery
+from app.connectors.discoverers import build_discoverers
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.llm import LLMClient, build_llm
 from app.models import Opportunity
+from app.services.candidates import known_count, next_batch, upsert_candidate
+from app.services.ingest import ingest_finding
 from app.services.source_check import SourceChecker
 from app.services.source_verification import verify_sources
 from app.services.spend import SpendGuard
 from app.services.triage import apply_assessment, assess_opportunity
+from app.utils import utcnow
 
 log = get_logger(__name__)
 
 NODE_ORDER = [
+    "source_discovery",
     "opportunity_intelligence",
     "agency_partnership_intelligence",
+    "candidate_verification",
     "source_verification",
     "research_evidence",
     "triage",
@@ -53,6 +60,8 @@ class WorkflowState(TypedDict, total=False):
     source_checks: dict[str, Any]
     ai: dict[str, Any]
     triage: dict[str, int]
+    source_discovery: list[dict[str, Any]]
+    candidate_stats: dict[str, int]
     ai_results: dict[str, dict[str, Any]]
     research: dict[str, dict[str, Any]]
     qualified: dict[str, dict[str, Any]]
@@ -99,6 +108,50 @@ def build_graph(
             }
 
         return run
+
+    def source_discovery(state: WorkflowState) -> dict[str, Any]:
+        """Find NEW candidate organizations (free, permitted sources). No evidence is created."""
+        query = DiscoveryQuery(**state["query"])
+        stats: list[dict[str, Any]] = []
+        for d in build_discoverers(settings):
+            try:
+                found = d.discover(query, known_count(session, d.name))
+            except ConnectorError as exc:
+                stats.append({"source": d.name, "found": 0, "new": 0, "error": str(exc)[:200]})
+                log.warning("discoverer_failed", source=d.name, error=str(exc)[:200])
+                continue
+            new = sum(upsert_candidate(session, c) for c in found)
+            stats.append({"source": d.name, "found": len(found), "new": new, "error": None})
+        return {"source_discovery": stats}
+
+    def candidate_verification(state: WorkflowState) -> dict[str, Any]:
+        """Read the candidates' own pages. Only what the pages state becomes evidence."""
+        pages = PartnerPageChecker(settings, checker)
+        query = DiscoveryQuery(**state["query"])
+        ids = set(state.get("opportunity_ids", []))
+        counts = {"checked": 0, "signal": 0, "no_signal": 0, "blocked": 0, "error": 0}
+        for cand in next_batch(session, settings.candidates_per_run):
+            status, detail, findings = pages.check(
+                cand.domain, cand.page_url, cand.name, cand.country
+            )
+            for f in findings:
+                ids.add(
+                    str(
+                        ingest_finding(
+                            session,
+                            f,
+                            "public_partner_pages",
+                            uuid.UUID(state["run_id"]),
+                            query.max_age_days,
+                        ).opportunity_id
+                    )
+                )
+            cand.status, cand.status_detail = status, detail[:250]
+            cand.last_checked_at, cand.signals = utcnow(), len(findings)
+            counts["checked"] += 1
+            counts[status] += 1
+        session.flush()
+        return {"opportunity_ids": sorted(ids), "candidate_stats": counts}
 
     def source_verification(state: WorkflowState) -> dict[str, Any]:
         if not settings.source_verification_enabled:
@@ -149,6 +202,8 @@ def build_graph(
         return {"metrics": PipelineAnalyticsAgent(session).run()}
 
     impl: dict[str, Callable[[WorkflowState], dict[str, Any]]] = {
+        "source_discovery": source_discovery,
+        "candidate_verification": candidate_verification,
         "opportunity_intelligence": discovery(OpportunityIntelligenceAgent),
         "agency_partnership_intelligence": discovery(AgencyPartnershipIntelligenceAgent),
         "source_verification": source_verification,

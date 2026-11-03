@@ -58,7 +58,11 @@ class QualificationAgent:
                 continue
             ai = self.ai_results.get(oid) or {}
             usable = bool(ai.get("dossier_ok"))
-            signal = AiSignal(ai.get("ai_project"), ai.get("verdict")) if usable else None
+            signal = (
+                AiSignal(ai.get("ai_project"), ai.get("verdict"), ai.get("external_delivery"))
+                if usable
+                else None
+            )
             assessment = assess_opportunity(self.session, opp, self.settings, signal)
             previous = apply_assessment(opp, assessment)
 
@@ -73,6 +77,8 @@ class QualificationAgent:
                     deterministic_score=det_score,
                     ai_fit_score=ai["fit_score"],
                     ai_risks=ai["risks"],
+                    ai_small_team_fit=ai.get("small_team_fit"),
+                    ai_next_action=ai.get("suggested_next_action"),
                 )
             criteria["assessment"] = assessment.to_json()
             criteria["previous"] = previous

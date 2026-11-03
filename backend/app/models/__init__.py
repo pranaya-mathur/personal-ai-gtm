@@ -1,6 +1,7 @@
 from app.models.entities import (
     AiAnalysis,
     Contact,
+    ContactRoute,
     Deal,
     Evidence,
     Interaction,
@@ -12,12 +13,14 @@ from app.models.entities import (
     ProviderSpend,
     Qualification,
     SearchProfile,
+    SourceCandidate,
     WorkflowRun,
 )
 
 __all__ = [
     "AiAnalysis",
     "Contact",
+    "ContactRoute",
     "Deal",
     "Evidence",
     "Interaction",
@@ -29,5 +32,6 @@ __all__ = [
     "ProviderSpend",
     "Qualification",
     "SearchProfile",
+    "SourceCandidate",
     "WorkflowRun",
 ]

@@ -9,6 +9,12 @@ from app.connectors.apify import ApifyActorConnector
 from app.connectors.apify_specs import SPECS
 from app.connectors.base import DiscoveryConnector
 from app.connectors.mock import MockAgencyConnector, MockOpportunityConnector
+from app.connectors.public_apis import (
+    ContractsFinderConnector,
+    HackerNewsFreelancerConnector,
+    TedApiConnector,
+    WorldBankApiConnector,
+)
 from app.core.config import Settings, get_settings
 
 Factory = Callable[[Settings], DiscoveryConnector]
@@ -19,6 +25,10 @@ _FACTORIES: dict[str, Factory] = {
     "public_partner_pages": lambda s: PublicPartnerPageConnector(s),
     "public_announcement_feeds": lambda s: AnnouncementFeedConnector(s),
     "wikidata_agencies": lambda s: WikidataAgencyConnector(s),
+    "ted_api": lambda s: TedApiConnector(s),
+    "worldbank_api": lambda s: WorldBankApiConnector(s),
+    "uk_contracts_finder": lambda s: ContractsFinderConnector(s),
+    "hn_freelancer_threads": lambda s: HackerNewsFreelancerConnector(s),
 }
 for _name, _spec in SPECS.items():
     _FACTORIES[_name] = lambda s, _spec=_spec: ApifyActorConnector(_spec, s)  # type: ignore[misc]

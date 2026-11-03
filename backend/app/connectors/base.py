@@ -37,6 +37,16 @@ class RawContact(BaseModel):
     profile_url: str | None = None
 
 
+class RawRoute(BaseModel):
+    """A published way to reach the buyer/partner. Only values the source literally contains."""
+
+    kind: Literal["email", "inquiry_form", "procurement_link", "page"]
+    value: str
+    source_url: str
+    role: str | None = None
+    snippet: str | None = None
+
+
 class RawFinding(BaseModel):
     kind: SignalKind
     title: str
@@ -54,6 +64,7 @@ class RawFinding(BaseModel):
     budget_text: str | None = None
     contact_route: str | None = None  # buyer email / application URL printed in the source
     # Agency findings: which of the three partnership classes the SOURCE supports.
+    routes: list[RawRoute] = Field(default_factory=list)
     evergreen: bool = False  # live page with no publication date: treated as current, stays undated
     partnership_class: Literal["active_requirement", "verified_model", "potential"] | None = None
 

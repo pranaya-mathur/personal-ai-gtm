@@ -178,6 +178,9 @@ class Opportunity(Base, IdMixin, TimestampMixin):
         String(24), default=Triage.UNASSESSED, server_default="unassessed", nullable=False
     )
     rejection_reason: Mapped[str | None] = mapped_column(String(64))
+    channel: Mapped[str] = mapped_column(
+        String(16), default="direct_buyer", server_default="direct_buyer", nullable=False
+    )  # agency | direct_buyer
     verified_by: Mapped[str | None] = mapped_column(String(128))  # authenticated identity
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     assessment: Mapped[dict] = mapped_column(JsonType, default=dict, nullable=False)  # type: ignore[type-arg]
@@ -354,3 +357,52 @@ class AiAnalysis(Base, IdMixin):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
+
+
+class SourceCandidate(Base, IdMixin, TimestampMixin):
+    """An organization/page found by automatic SOURCE DISCOVERY. It is only a lead to read: no
+    commercial claim exists until its pages are fetched and verified as evidence."""
+
+    __tablename__ = "source_candidates"
+    __table_args__ = (
+        UniqueConstraint("domain", name="uq_source_candidates_domain"),
+        CheckConstraint(
+            "status IN ('new', 'signal', 'no_signal', 'blocked', 'error')",
+            name="ck_source_candidates_status",
+        ),
+    )
+
+    domain: Mapped[str] = mapped_column(String(253), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(256))
+    country: Mapped[str | None] = mapped_column(String(64))
+    origin: Mapped[str] = mapped_column(String(48), nullable=False)  # wikidata | github | search
+    origin_ref: Mapped[str | None] = mapped_column(String(2048))  # where it was discovered
+    page_url: Mapped[str | None] = mapped_column(String(2048))  # specific page to read first
+    status: Mapped[str] = mapped_column(String(16), default="new", nullable=False)
+    status_detail: Mapped[str | None] = mapped_column(String(256))
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    signals: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class ContactRoute(Base, IdMixin, TimestampMixin):
+    """A published way to reach a buyer/partner, exactly as the source prints it."""
+
+    __tablename__ = "contact_routes"
+    __table_args__ = (
+        UniqueConstraint("opportunity_id", "kind", "value", name="uq_contact_routes_value"),
+        CheckConstraint(
+            "kind IN ('email', 'inquiry_form', 'procurement_link', 'page')",
+            name="ck_contact_routes_kind",
+        ),
+        Index("ix_contact_routes_org", "organization_id"),
+    )
+
+    opportunity_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("opportunities.id", ondelete="CASCADE"), nullable=False
+    )
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id"))
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    value: Mapped[str] = mapped_column(String(2048), nullable=False)
+    role: Mapped[str | None] = mapped_column(String(256))  # only if the source states a role
+    source_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    snippet: Mapped[str | None] = mapped_column(Text)  # source text the route came from

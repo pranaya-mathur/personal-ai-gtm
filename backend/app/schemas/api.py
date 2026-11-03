@@ -124,6 +124,14 @@ class AnalysisOut(ORM):
     created_at: datetime
 
 
+class RouteOut(BaseModel):
+    kind: str
+    value: str
+    role: str | None
+    source_url: str
+    snippet: str | None = None
+
+
 class BoardRow(BaseModel):
     """One dashboard row: everything a reviewer needs, derived only from stored data."""
 
@@ -159,6 +167,15 @@ class BoardRow(BaseModel):
     stage_b: dict[str, Any]
     view: str  # which dashboard list this record belongs to
     evidence_excerpt: str | None
+    channel: str
+    project_type: str
+    budget_value: float | None  # numeric only for EUR/USD/GBP; None = unknown, never guessed
+    budget_currency: str | None
+    age_days: int | None
+    routes: list[RouteOut]
+    ai_next_action: str | None
+    small_team_fit: str | None
+    external_delivery: str | None
 
 
 class BudgetLine(BaseModel):

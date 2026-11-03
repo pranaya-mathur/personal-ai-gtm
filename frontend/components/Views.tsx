@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   api, jobTotals, splitReal, viewRows,
-  type Analysis, type BoardRow, type CostSummary, type OpportunityDetail, type RecordView, type Run,
+  type AiUsage, type Analysis, type BoardRow, type CostSummary, type Filters, NO_FILTERS, type RouteRow, type SourcePerformance, type OpportunityDetail, type RecordView, type Run,
 } from "@/lib/api";
 
 const MOCK_BADGE = <span className="badge err" title="Fictional fixture, not a real lead">MOCK FIXTURE</span>;
@@ -61,9 +61,10 @@ function Stage({ r }: { r: BoardRow }) {
 
 export function RecordsView({
   rows, view, title, blurb, onOpen,
-}: { rows: BoardRow[]; view: RecordView; title: string; blurb: string; onOpen: (id: string) => void }) {
-  const mock = splitReal(rows).mock.filter((r) => r.view === view).length;
-  const list = viewRows(rows, view);
+}: { rows: BoardRow[]; view: RecordView | RecordView[]; title: string; blurb: string; onOpen: (id: string) => void }) {
+  const views = Array.isArray(view) ? view : [view];
+  const mock = splitReal(rows).mock.filter((r) => views.includes(r.view)).length;
+  const list = views.flatMap((v) => viewRows(rows, v));
   return (
     <section className="card" style={{ overflowX: "auto" }}>
       <h2>{title} ({list.length})</h2>
@@ -81,13 +82,14 @@ export function RecordsView({
                 <td>{r.organization ?? "unknown"}{r.organization_kind === "agency" ? " (agency)" : ""}</td>
                 <td>{r.country ?? "unknown"}</td>
                 <td><a href="#" onClick={(e) => { e.preventDefault(); onOpen(r.id); }}>{r.title}</a>
-                  <div className="muted">{r.verification_status}{r.deadline ? ` · deadline ${new Date(r.deadline).toLocaleDateString()}` : ""}</div></td>
+                  <div className="muted">{r.channel === "agency" ? "agency channel" : "direct buyer"} · {r.project_type.replace("_", " ")} · {r.verification_status}{r.deadline ? ` · deadline ${new Date(r.deadline).toLocaleDateString()}` : ""}</div></td>
                 <td>{r.evidence_excerpt && <blockquote>{r.evidence_excerpt}</blockquote>}
                   {r.source_url && <a href={r.source_url} target="_blank" rel="noopener noreferrer">source ({r.evidence_count})</a>}</td>
                 <td><Stage r={r} /></td>
-                <td>{r.stated_budget ?? "unknown"}</td>
+                <td>{r.stated_budget ?? "unknown"}{r.small_team_fit && <div className="muted">small-team fit (AI): {r.small_team_fit}</div>}</td>
                 <td>{r.missing.length === 0 ? "–" : <ul>{r.missing.map((m) => <li key={m}>{m}</li>)}</ul>}</td>
-                <td>{r.next_action}</td>
+                <td>{r.next_action}{r.ai_next_action && <div className="muted">AI suggestion (unverified): {r.ai_next_action}</div>}
+                  {r.routes.length > 0 && <div className="muted">routes: {r.routes.map((x) => x.value).join(", ")}</div>}</td>
               </tr>
             ))}
           </tbody>
@@ -179,6 +181,115 @@ export function ResearchDetail({ id, row }: { id: string | null; row: BoardRow |
             <div className="muted">{a.provider}/{a.model}</div>
             {a.rejection_reason && <div className="err">{a.rejection_reason}</div>}
             {a.output && <pre>{JSON.stringify(a.output, null, 2)}</pre>}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+
+const TYPES = ["rag_knowledge", "ai_agents", "chatbot_support", "document_intelligence", "workflow_automation", "llm_integration", "computer_vision", "ml_predictive", "general_ai", "other"];
+
+export function FilterBar({ f, set }: { f: Filters; set: (f: Filters) => void }) {
+  const upd = (k: keyof Filters) => (e: { target: { value: string } }) => set({ ...f, [k]: e.target.value });
+  return (
+    <section className="card" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
+      <label>Country<input value={f.country} onChange={upd("country")} placeholder="any" /></label>
+      <label>Project type
+        <select value={f.projectType} onChange={upd("projectType")}>
+          <option value="">any</option>{TYPES.map((t) => <option key={t} value={t}>{t.replace("_", " ")}</option>)}
+        </select></label>
+      <label>Channel
+        <select value={f.channel} onChange={upd("channel")}>
+          <option value="">any</option><option value="agency">agency</option><option value="direct_buyer">direct buyer</option>
+        </select></label>
+      <label>Qualification
+        <select value={f.triage} onChange={upd("triage")}>
+          <option value="">any</option><option value="actionable">actionable</option>
+          <option value="needs_verification">needs verification</option><option value="rejected">rejected</option>
+        </select></label>
+      <label>Budget min<input value={f.minBudget} onChange={upd("minBudget")} inputMode="numeric" style={{ width: 90 }} /></label>
+      <label>Budget max<input value={f.maxBudget} onChange={upd("maxBudget")} inputMode="numeric" style={{ width: 90 }} /></label>
+      <label>Recency
+        <select value={f.maxAgeDays} onChange={upd("maxAgeDays")}>
+          <option value="">any age</option><option value="7">last 7 days</option><option value="30">last 30 days</option><option value="90">last 90 days</option>
+        </select></label>
+      <button onClick={() => set(NO_FILTERS)}>Clear</button>
+      <span className="muted">Budget filters hide records whose budget is unknown.</span>
+    </section>
+  );
+}
+
+export function ContactsView({ routes, onOpen }: { routes: RouteRow[]; onOpen: (id: string) => void }) {
+  const real = routes.filter((r) => !r.is_mock);
+  return (
+    <section className="card" style={{ overflowX: "auto" }}>
+      <h2>Contact routes and next actions ({real.length})</h2>
+      <p className="muted">Exactly what each source published. Nothing is guessed or purchased; nothing is sent.</p>
+      {real.length === 0 ? <Empty what="published contact routes" /> : (
+        <table>
+          <thead><tr><th>Organization</th><th>Route</th><th>Role (as printed)</th><th>Record</th><th>Status</th><th>Next action</th><th>Source</th></tr></thead>
+          <tbody>
+            {real.map((r) => (
+              <tr key={`${r.opportunity_id}-${r.kind}-${r.value}`}>
+                <td>{r.organization ?? "unknown"}{r.country ? ` (${r.country})` : ""}</td>
+                <td><span className="badge">{r.kind.replace("_", " ")}</span> {r.kind === "email" ? r.value : <a href={r.value} target="_blank" rel="noopener noreferrer">{r.value}</a>}</td>
+                <td>{r.role ?? "not stated"}</td>
+                <td><a href="#" onClick={(e) => { e.preventDefault(); onOpen(r.opportunity_id); }}>{r.opportunity}</a></td>
+                <td><span className="badge">{r.triage}</span></td>
+                <td>{r.next_action}</td>
+                <td><a href={r.source_url} target="_blank" rel="noopener noreferrer">source</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+export function SourcesView({ data }: { data: SourcePerformance | null }) {
+  if (!data) return <section className="card"><span className="muted">Loading…</span></section>;
+  const origins = Object.entries(data.candidates);
+  return (
+    <>
+      <section className="card" style={{ overflowX: "auto" }}>
+        <h2>Source performance</h2>
+        <p className="muted">Built from stored records only. "False positives" = retrieved but rejected as not relevant.</p>
+        {data.sources.length === 0 ? <Empty what="source records" /> : (
+          <table>
+            <thead><tr><th>Source</th><th>Records</th><th>Actionable</th><th>Needs verification</th><th>Rejected</th><th>False positives</th><th>Expired / awarded</th><th>No contact route</th><th>Cost</th></tr></thead>
+            <tbody>{data.sources.map((s) => (
+              <tr key={s.source}>
+                <td>{s.source} {s.is_mock && MOCK_BADGE}</td><td>{s.records}</td><td>{s.actionable}</td>
+                <td>{s.needs_verification}</td><td>{s.rejected}</td><td>{s.false_positives}</td>
+                <td>{s.expired_or_awarded}</td><td>{s.missing_contact_route}</td><td>${s.cost_usd.toFixed(4)}</td>
+              </tr>))}</tbody>
+          </table>
+        )}
+      </section>
+      <section className="card">
+        <h2>Automatic candidate discovery</h2>
+        <p className="muted">Organizations found automatically. A candidate is a lead to read, not evidence.</p>
+        {origins.length === 0 ? <Empty what="discovered candidates" /> : origins.map(([o, st]) => (
+          <div className="item" key={o}>{o}: {Object.entries(st).map(([k, v]) => `${k} ${v}`).join(" · ")}</div>
+        ))}
+      </section>
+    </>
+  );
+}
+
+export function SpendView({ costs, usage }: { costs: CostSummary | null; usage: AiUsage | null }) {
+  return (
+    <section className="grid cols3">
+      <CostPanel costs={costs} />
+      <div className="card">
+        <h2>OpenAI usage by agent</h2>
+        {!usage || usage.by_agent.length === 0 ? <span className="muted">No AI calls recorded.</span> : usage.by_agent.map((a) => (
+          <div className="item" key={a.agent}>
+            {a.agent}: {a.calls} calls · {a.cached} cache hits · {a.rejected} rejected · {a.input_tokens} in / {a.output_tokens} out · ${a.cost_usd.toFixed(4)}
+            {Object.entries(a.reasons).map(([why, n]) => <div className="muted" key={why}>{n}× {why}</div>)}
           </div>
         ))}
       </div>

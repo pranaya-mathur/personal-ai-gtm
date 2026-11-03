@@ -11,7 +11,7 @@ produces no finding: offering complementary services does not imply a need for e
 import re
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 from xml.etree import ElementTree
 
 import httpx
@@ -22,6 +22,7 @@ from app.connectors.base import (
     DiscoveryQuery,
     DiscoveryResult,
     RawFinding,
+    RawRoute,
     SignalKind,
 )
 from app.core.config import Settings
@@ -33,6 +34,7 @@ from app.services.partnership import (
     page_title,
     visible_text,
 )
+from app.services.routes import routes_from_html
 from app.services.source_check import USER_AGENT, SourceChecker
 
 log = get_logger(__name__)
@@ -65,51 +67,62 @@ def _org_name(title: str | None, host: str) -> str:
     return host
 
 
-class PublicPartnerPageConnector:
-    name = "public_partner_pages"
-    kinds = frozenset({SignalKind.PARTNER_ACTIVITY})
-    is_mock = False
+_LINK = re.compile(r"""(?is)<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>""")
+_PARTNER_LINK = re.compile(r"(partner|white-?label|sub-?contract|collaborat)", re.I)
+CONTACT_PATHS = ["/contact", "/contact-us", "/about/contact"]
+
+
+class PartnerPageChecker:
+    """Reads a domain's own partner pages (robots.txt + SSRF-safe) and reports what they STATE.
+    Verification only: it never invents demand and returns nothing for silent pages."""
 
     def __init__(self, settings: Settings, checker: SourceChecker | None = None) -> None:
-        self.settings, self._checker = settings, checker
+        self.settings, self._checker = settings, checker or SourceChecker()
 
-    def estimate_cost(self, query: DiscoveryQuery) -> CostEstimate:
-        return CostEstimate(usd=0.0, note="free: direct fetch of listed public pages")
+    def urls_for(self, domain: str, page_url: str | None = None) -> list[str]:
+        if page_url:
+            return [page_url]
+        base = domain if "//" in domain else "https://" + domain
+        if urlsplit(base).path.strip("/"):
+            return [base]  # an explicit page: read exactly that page
+        return [base.rstrip("/") + p for p in PARTNER_PATHS]
 
-    def _urls(self) -> list[str]:
-        urls: list[str] = []
-        for seed in self.settings.agency_seed_list:
-            full = seed if "//" in seed else "https://" + seed
-            if urlsplit(full).path.strip("/"):
-                urls.append(full)  # an explicit page: read exactly that page
-            else:  # bare domain: only the conventional partner-page paths
-                urls += [full.rstrip("/") + p for p in PARTNER_PATHS]
-        return urls[: self.settings.agency_pages_max]
-
-    def discover(self, query: DiscoveryQuery) -> DiscoveryResult:
-        if not self.settings.agency_seed_list:
-            raise ConnectorError(
-                "AGENCY_SEED_URLS is empty: list the company domains/pages to read"
-            )
-        checker = self._checker or SourceChecker()
+    def check(
+        self,
+        domain: str,
+        page_url: str | None = None,
+        name: str | None = None,
+        country: str | None = None,
+    ) -> tuple[str, str, list[RawFinding]]:
+        """Returns (status, detail, findings); status in signal | no_signal | blocked | error."""
         findings: list[RawFinding] = []
-        seen: set[str] = set()
-        for url in self._urls():
-            status, body = checker.fetch_page(url)
-            if status is not SourceCheckStatus.CONFIRMED:
-                log.info("partner_page_skipped", url=url, status=str(status))
+        seen_classes: set[str] = set()
+        reached = blocked = 0
+        urls = self.urls_for(domain, page_url)
+        if not page_url:  # follow the site's own partner links first (same host only)
+            urls = self._partner_links(domain) + urls
+        for url in dict.fromkeys(urls):
+            status, body = self._checker.fetch_page(url)
+            if status is SourceCheckStatus.BLOCKED:
+                blocked += 1
                 continue
-            signal = classify_partner_text(visible_text(body), self.settings.topic_term_list)
+            if status is not SourceCheckStatus.CONFIRMED:
+                continue
+            reached += 1
+            text = visible_text(body)
+            signal = classify_partner_text(text, self.settings.topic_term_list)
             if signal is None:
                 continue  # nothing stated: do not infer
             host = _host(url)
-            key = f"{host}:{signal.partnership_class}"
-            if key in seen:
-                continue
-            seen.add(key)
-            org = _org_name(page_title(body), host)
+            org = name or _org_name(page_title(body), host)
             # A live page carries no date: it can show a MODEL, never prove a CURRENT request.
             cls = "verified_model"
+            if cls in seen_classes:
+                continue
+            seen_classes.add(cls)
+            routes = routes_from_html(body, url, text)
+            routes += self._contact_page_routes(host)
+            email = next((r.value for r in routes if r.kind == "email"), None)
             findings.append(
                 RawFinding(
                     kind=SignalKind.PARTNER_ACTIVITY,
@@ -118,15 +131,74 @@ class PublicPartnerPageConnector:
                     original_text="\n".join(signal.sentences),
                     organization_name=org,
                     organization_domain=host,
+                    organization_country=country,
                     provider_confidence=_CONF[cls],
                     partnership_class=cls,
                     evergreen=True,
                     source_status="unknown",
-                    contact_route=find_email(
-                        "\n".join(signal.sentences) + "\n" + visible_text(body)
-                    ),
+                    contact_route=email,
+                    routes=routes,
                 )
             )
+        if findings:
+            return "signal", f"{len(findings)} model statement(s)", findings
+        if reached:
+            return "no_signal", "pages read; nothing stated about external delivery", []
+        if blocked:
+            return "blocked", "robots.txt or address policy disallowed the pages", []
+        root_status, _ = self._checker.fetch_page(f"https://{domain}/")
+        if root_status is SourceCheckStatus.CONFIRMED:
+            return "no_signal", "site reachable; no partner/subcontracting page published", []
+        if root_status is SourceCheckStatus.BLOCKED:
+            return "blocked", "robots.txt or address policy disallowed the site", []
+        return "error", "site not reachable", []
+
+    def _partner_links(self, domain: str) -> list[str]:
+        status, body = self._checker.fetch_page(f"https://{domain}/")
+        if status is not SourceCheckStatus.CONFIRMED:
+            return []
+        links: list[str] = []
+        for href, label in _LINK.findall(body):
+            text = f"{href} {re.sub(r'<[^>]+>', ' ', label)}"
+            if _PARTNER_LINK.search(text):
+                full = urljoin(f"https://{domain}/", href)
+                if urlsplit(full).hostname in (domain, f"www.{domain}") and full not in links:
+                    links.append(full)
+        return links[:3]
+
+    def _contact_page_routes(self, host: str) -> list[RawRoute]:
+        for path in CONTACT_PATHS:
+            url = f"https://{host}{path}"
+            status, body = self._checker.fetch_page(url)
+            if status is SourceCheckStatus.CONFIRMED:
+                return routes_from_html(body, url, visible_text(body))
+        return []
+
+
+class PublicPartnerPageConnector:
+    """Reads the partner pages of domains YOU list (AGENCY_SEED_URLS). Candidate domains found
+    automatically are read by the candidate_verification workflow step instead."""
+
+    name = "public_partner_pages"
+    kinds = frozenset({SignalKind.PARTNER_ACTIVITY})
+    is_mock = False
+
+    def __init__(self, settings: Settings, checker: SourceChecker | None = None) -> None:
+        self.settings = settings
+        self._pages = PartnerPageChecker(settings, checker)
+
+    def estimate_cost(self, query: DiscoveryQuery) -> CostEstimate:
+        return CostEstimate(usd=0.0, note="free: direct fetch of listed public pages")
+
+    def discover(self, query: DiscoveryQuery) -> DiscoveryResult:
+        if not self.settings.agency_seed_list:
+            raise ConnectorError(
+                "AGENCY_SEED_URLS is empty: list the company domains/pages to read"
+            )
+        findings: list[RawFinding] = []
+        for seed in self.settings.agency_seed_list[: self.settings.agency_pages_max]:
+            _, _, found = self._pages.check(seed)
+            findings += found
         return DiscoveryResult(provider=self.name, findings=findings[: query.max_results])
 
 

@@ -94,3 +94,6 @@ Only `.env.example` is committed. `.env` is git-ignored. Keys use `SecretStr` an
 - Claim checks prove a quote exists in the evidence, not that the AI's interpretation follows from it.
 - Spend caps use reservations (estimate first, actual after). Failed or unmetered calls keep their estimate; provider billing can lag, so reconcile in the provider consoles.
 - Budgets are compared only for EUR/USD/GBP; other currencies stay "unknown".
+
+## Automatic discovery (free, keyless)
+Enabled via `ENABLED_CONNECTORS` / `ENABLED_DISCOVERERS`: `ted_api`, `worldbank_api`, `uk_contracts_finder`, `hn_freelancer_threads` (direct buyers) and Wikidata / GitHub organization discovery feeding `candidate_verification` (agencies). Search-engine discovery (Brave) is off until `SEARCH_DISCOVERY_ENABLED=true` and `BRAVE_API_KEY` are set. Dashboard tabs filter by country, project type, budget, recency, channel and qualification; unknown budgets are never treated as in-range.

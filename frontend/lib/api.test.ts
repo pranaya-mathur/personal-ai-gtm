@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupByCategory, jobTotals, runProgress, splitReal, viewRows, type BoardRow, type Opportunity, type Run } from "./api";
+import { groupByCategory, jobTotals, runProgress, splitReal, viewRows, applyFilters, NO_FILTERS, type BoardRow, type Opportunity, type Run } from "./api";
 
 const o = (id: string, category: Opportunity["category"]): Opportunity => ({
   id, category, title: id, status: "new", verification_status: "unverified",
@@ -22,8 +22,8 @@ describe("runProgress", () => {
   });
   it("reports percent of workflow nodes completed", () => {
     expect(runProgress(run([]))).toBe(0);
-    expect(runProgress(run(["a", "b", "c"]))).toBe(33);
-    expect(runProgress(run(Array(9).fill("x")))).toBe(100);
+    expect(runProgress(run(["a", "b", "c"]))).toBe(27);
+    expect(runProgress(run(Array(11).fill("x")))).toBe(100);
   });
 });
 
@@ -53,8 +53,24 @@ describe("viewRows", () => {
     expect(viewRows(rows, "rejected").map((x) => x.id)).toEqual(["x"]);
     expect(viewRows(rows, "potential_partner")).toEqual([]);
   });
-  it("has 9 workflow nodes for progress", () => {
-    const run = { state: { completed_nodes: new Array(9).fill("n") } } as unknown as Run;
+  it("has 11 workflow nodes for progress", () => {
+    const run = { state: { completed_nodes: new Array(11).fill("n") } } as unknown as Run;
     expect(runProgress(run)).toBe(100);
+  });
+});
+
+describe("applyFilters", () => {
+  const row = (o: Partial<BoardRow>) => ({ country: "GBR", project_type: "chatbot_support", channel: "direct_buyer", triage: "needs_verification", budget_value: null, age_days: 5, ...o }) as BoardRow;
+  it("treats an unknown budget as unknown, never as zero or in-range", () => {
+    const rows = [row({ budget_value: 8000 }), row({ budget_value: null }), row({ budget_value: 90000 })];
+    expect(applyFilters(rows, { ...NO_FILTERS, minBudget: "3000", maxBudget: "10000" }).length).toBe(1);
+    expect(applyFilters(rows, NO_FILTERS).length).toBe(3);
+  });
+  it("filters by country, channel, status, type and recency", () => {
+    const rows = [row({}), row({ country: "Germany", channel: "agency", age_days: 200, project_type: "ai_agents", triage: "actionable" })];
+    expect(applyFilters(rows, { ...NO_FILTERS, country: "ger" }).length).toBe(1);
+    expect(applyFilters(rows, { ...NO_FILTERS, channel: "agency", triage: "actionable" }).length).toBe(1);
+    expect(applyFilters(rows, { ...NO_FILTERS, maxAgeDays: "30" }).length).toBe(1);
+    expect(applyFilters(rows, { ...NO_FILTERS, projectType: "ai_agents" })[0].country).toBe("Germany");
   });
 });

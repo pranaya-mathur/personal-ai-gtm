@@ -9,7 +9,7 @@ from app.ai.tasks import AITasks
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.llm.base import LLMDisabledError
-from app.models import Opportunity
+from app.models import Evidence, Opportunity, OpportunityEvidence
 from app.models.enums import OpportunityCategory, Triage, VerificationStatus
 from app.services.spend import SpendLimitExceeded
 
@@ -26,6 +26,18 @@ class AIAnalysisAgent:
 
     def candidates(self, opportunity_ids: list[str]) -> list[Opportunity]:
         ids = [uuid.UUID(o) for o in opportunity_ids]
+        if self.tasks.gateway.client.is_mock:
+            # Mock AI output is placeholder text. It must never be attached to a real record, so
+            # in mock mode only fixture (mock-provider) records are analysed.
+            real = set(
+                self.session.execute(
+                    select(OpportunityEvidence.opportunity_id)
+                    .join(Evidence, Evidence.id == OpportunityEvidence.evidence_id)
+                    .where(OpportunityEvidence.opportunity_id.in_(ids))
+                    .where(~Evidence.provider.like("mock%"))
+                ).scalars()
+            )
+            ids = [i for i in ids if i not in real]
         return list(
             self.session.execute(
                 select(Opportunity)
@@ -70,6 +82,9 @@ class AIAnalysisAgent:
                 "reliability": dossier.reliability,
                 "fit_score": dossier.fit_score,
                 "risks": dossier.risks,
+                "external_delivery": dossier.external_delivery,
+                "small_team_fit": dossier.small_team_fit,
+                "suggested_next_action": dossier.suggested_next_action,
                 "budget": dossier.budget.text if dossier.budget else None,
                 "deadline": dossier.deadline.text if dossier.deadline else None,
             }

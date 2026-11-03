@@ -80,3 +80,6 @@ class OpportunityDossier(_Strict):
     open_questions: list[str]  # what the evidence does NOT answer
     fit_score: float  # 0..100 fit for a paid AI implementation team
     risks: list[str]
+    external_delivery: Literal["permitted", "not_permitted", "unclear"]  # may outsiders deliver?
+    small_team_fit: Literal["good", "stretch", "poor", "unclear"]  # realistic for a small team?
+    suggested_next_action: str  # one concrete step, grounded in the evidence

@@ -20,7 +20,12 @@ TASK_INSTRUCTIONS = {
         "(quote it in ai_project_support); 'implied' if AI is only mentioned; else 'none'. verdict "
         "and reliability: does the evidence support this as an external delivery opportunity. "
         "findings: source-backed facts. open_questions: what is unknown. fit_score 0..100 for a "
-        "small team delivering paid AI implementation projects; risks stated plainly."
+        "small team delivering paid AI implementation projects; risks stated plainly. "
+        "external_delivery: 'permitted' only if the evidence says outside suppliers/partners/"
+        "subcontractors/remote delivery are allowed, 'not_permitted' only if it says they are not, "
+        "otherwise 'unclear'. small_team_fit: good/stretch/poor/unclear for a 2-5 person AI "
+        "engineering team given the stated scope and size. suggested_next_action: one concrete step "
+        "(e.g. read a named document, use the stated submission route); never invent a contact."
     ),
     "evidence_evaluation": "Judge whether the evidence actually supports the opportunity as described (title and category). reliability is 0..1. List concrete issues.",
     "research_brief": "Produce source-backed findings useful for approaching this buyer, plus open questions the evidence cannot answer.",

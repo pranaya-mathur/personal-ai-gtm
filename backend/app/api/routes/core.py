@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select, text
@@ -14,6 +15,7 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import (
     AiAnalysis,
+    ContactRoute,
     Evidence,
     LlmUsage,
     Opportunity,
@@ -23,6 +25,7 @@ from app.models import (
     ProviderSpend,
     Qualification,
     SearchProfile,
+    SourceCandidate,
     WorkflowRun,
 )
 from app.models.enums import (
@@ -47,9 +50,12 @@ from app.schemas.api import (
     ProfileCreate,
     ProfileOut,
     ProfileUpdate,
+    RouteOut,
     RunCreate,
     RunOut,
 )
+from app.services.project_type import project_type as project_type_of
+from app.services.triage import _parse_value
 from app.utils import utcnow
 
 public_router = APIRouter()
@@ -404,10 +410,13 @@ def view_for(opp: Opportunity, org_kind: str | None) -> str:
     if opp.triage == Triage.REJECTED:
         return "rejected"
     cat = opp.category
+    agency = opp.channel == "agency" or org_kind == "agency"
     if cat == OpportunityCategory.VERIFIED_PARTNERSHIP:
         return "verified_partnership"
     if cat == OpportunityCategory.SPECULATIVE_PROSPECT:
-        return "potential_partner" if org_kind == "agency" else "unqualified_signal"
+        return "potential_partner" if agency else "unqualified_signal"
+    if agency:
+        return "agency_seeking"  # a stated agency need; a human must still confirm it is current
     if opp.triage == Triage.ACTIONABLE:
         return "active_project"
     return "needs_verification"
@@ -440,12 +449,29 @@ def next_action(opp: Opportunity, score: float | None) -> str:
 
 @router.get("/board", response_model=list[BoardRow])
 def board(
-    category: OpportunityCategory | None = None, db: Session = Depends(get_db)
+    category: OpportunityCategory | None = None,
+    view: str | None = None,
+    triage: str | None = None,
+    channel: str | None = None,
+    country: str | None = None,
+    project_type: str | None = None,
+    min_budget: float | None = None,
+    max_budget: float | None = None,
+    max_age_days: int | None = None,
+    include_mock: bool = True,
+    db: Session = Depends(get_db),
 ) -> list[BoardRow]:
-    stmt = select(Opportunity).order_by(Opportunity.last_seen_at.desc()).limit(200)
+    """Filters apply to what the source states. A record with an unknown budget is excluded by a
+    budget filter (unknown is not 'zero'); recency uses the publication date, else first seen."""
+    stmt = select(Opportunity).order_by(Opportunity.last_seen_at.desc()).limit(500)
     if category:
         stmt = stmt.where(Opportunity.category == category)
+    if channel:
+        stmt = stmt.where(Opportunity.channel == channel)
+    if triage:
+        stmt = stmt.where(Opportunity.triage == triage)
     rows: list[BoardRow] = []
+    now = utcnow()
     for opp in db.execute(stmt).scalars():
         org = db.get(Organization, opp.organization_id) if opp.organization_id else None
         qual = (
@@ -466,55 +492,193 @@ def board(
                 .order_by(Evidence.retrieved_at)
             ).scalars()
         )
-        budget = summary = None
+        dossier: dict[str, Any] = {}
+        summary = None
         for a in db.execute(
             select(AiAnalysis)
             .where(AiAnalysis.opportunity_id == opp.id, AiAnalysis.validated.is_(True))
             .order_by(AiAnalysis.created_at.desc())
         ).scalars():
             out = a.output or {}
-            if budget is None and a.task == "requirement_extraction" and out.get("budget"):
-                budget = out["budget"].get("text")
-            if summary is None and a.task == "opportunity_analysis":
+            if not dossier and a.task == "dossier":
+                dossier = out
+            if summary is None and a.task in ("dossier", "opportunity_analysis"):
                 summary = out.get("summary")
-        score = qual.score if qual else None
-        rows.append(
-            BoardRow(
-                id=opp.id,
-                category=opp.category,
-                title=opp.title,
-                status=opp.status,
-                verification_status=opp.verification_status,
-                confidence=opp.confidence,
-                organization=org.name if org else None,
-                organization_kind=org.kind if org else None,
-                country=org.country if org else None,
-                domain=org.domain if org else None,
-                is_mock=bool(evs) and all(e.provider.startswith("mock") for e in evs),
-                score=score,
-                qualification_rationale=qual.rationale if qual else None,
-                evidence_count=len(evs),
-                source_url=evs[0].source_url if evs else None,
-                published_at=evs[0].published_at if evs else None,
-                stated_budget=budget,
-                ai_summary=summary,
-                next_action=next_action(opp, score),
-                last_seen_at=opp.last_seen_at,
-                triage=opp.triage,
-                technical_relevance=opp.technical_relevance,
-                rejection_reason=opp.rejection_reason,
-                source_status=opp.source_status,
-                deadline=opp.deadline,
-                contact_route=opp.contact_route,
-                missing=list((opp.assessment or {}).get("missing", [])),
-                reasons=list((opp.assessment or {}).get("reasons", [])),
-                stage_a=dict((opp.assessment or {}).get("stage_a", {})),
-                stage_b=dict((opp.assessment or {}).get("stage_b", {})),
-                view=view_for(opp, org.kind if org else None),
-                evidence_excerpt=(evs[0].original_text[:300] if evs else None),
+        budget = opp.budget_text or ((dossier.get("budget") or {}).get("text"))
+        bval, bcur = _parse_value(budget)
+        pub = evs[0].published_at if evs else None
+        ref = pub or opp.first_seen_at
+        if ref is not None and ref.tzinfo is None:
+            ref = ref.replace(tzinfo=now.tzinfo)
+        age = (now - ref).days if ref is not None else None
+        text = f"{opp.title}\n{evs[0].original_text if evs else ''}"
+        ptype = project_type_of(text)
+        routes = [
+            RouteOut(
+                kind=r.kind, value=r.value, role=r.role, source_url=r.source_url, snippet=r.snippet
             )
+            for r in db.execute(
+                select(ContactRoute).where(ContactRoute.opportunity_id == opp.id)
+            ).scalars()
+        ]
+        score = qual.score if qual else None
+        is_mock = bool(evs) and all(e.provider.startswith("mock") for e in evs)
+        row = BoardRow(
+            id=opp.id,
+            category=opp.category,
+            title=opp.title,
+            status=opp.status,
+            verification_status=opp.verification_status,
+            confidence=opp.confidence,
+            organization=org.name if org else None,
+            organization_kind=org.kind if org else None,
+            country=org.country if org else None,
+            domain=org.domain if org else None,
+            is_mock=is_mock,
+            score=score,
+            qualification_rationale=qual.rationale if qual else None,
+            evidence_count=len(evs),
+            source_url=evs[0].source_url if evs else None,
+            published_at=pub,
+            stated_budget=budget,
+            ai_summary=summary,
+            next_action=next_action(opp, score),
+            last_seen_at=opp.last_seen_at,
+            triage=opp.triage,
+            technical_relevance=opp.technical_relevance,
+            rejection_reason=opp.rejection_reason,
+            source_status=opp.source_status,
+            deadline=opp.deadline,
+            contact_route=opp.contact_route,
+            missing=list((opp.assessment or {}).get("missing", [])),
+            reasons=list((opp.assessment or {}).get("reasons", [])),
+            stage_a=dict((opp.assessment or {}).get("stage_a", {})),
+            stage_b=dict((opp.assessment or {}).get("stage_b", {})),
+            view=view_for(opp, org.kind if org else None),
+            evidence_excerpt=(evs[0].original_text[:300] if evs else None),
+            channel=opp.channel,
+            project_type=ptype,
+            budget_value=bval,
+            budget_currency=bcur or None,
+            age_days=age,
+            routes=routes,
+            ai_next_action=dossier.get("suggested_next_action"),
+            small_team_fit=dossier.get("small_team_fit"),
+            external_delivery=dossier.get("external_delivery"),
         )
+        if is_mock and not include_mock:
+            continue
+        if view and row.view != view:
+            continue
+        if country and country.lower() not in (row.country or "").lower():
+            continue
+        if project_type and row.project_type != project_type:
+            continue
+        if (min_budget is not None or max_budget is not None) and (
+            row.budget_value is None
+            or (min_budget is not None and row.budget_value < min_budget)
+            or (max_budget is not None and row.budget_value > max_budget)
+        ):
+            continue
+        if max_age_days is not None and (row.age_days is None or row.age_days > max_age_days):
+            continue
+        rows.append(row)
     return rows
+
+
+@router.get("/routes")
+def contact_routes(db: Session = Depends(get_db)) -> list[dict[str, object]]:
+    """Every published contact route with the evidence it came from and the next step.
+    Routes are exactly what the source printed; none are constructed or purchased."""
+    out: list[dict[str, object]] = []
+    for r in db.execute(
+        select(ContactRoute).order_by(ContactRoute.created_at.desc()).limit(500)
+    ).scalars():
+        opp = db.get(Opportunity, r.opportunity_id)
+        if opp is None:
+            continue
+        org = db.get(Organization, r.organization_id) if r.organization_id else None
+        out.append(
+            {
+                "kind": r.kind,
+                "value": r.value,
+                "role": r.role,
+                "source_url": r.source_url,
+                "opportunity_id": str(opp.id),
+                "opportunity": opp.title,
+                "organization": org.name if org else None,
+                "country": org.country if org else None,
+                "channel": opp.channel,
+                "triage": opp.triage,
+                "view": view_for(opp, org.kind if org else None),
+                "next_action": next_action(opp, None),
+                "is_mock": r.source_url.startswith("https://mock") or ".example" in r.source_url,
+            }
+        )
+    return out
+
+
+@router.get("/sources/performance")
+def source_performance(db: Session = Depends(get_db)) -> dict[str, object]:
+    """Per-source yield, built only from stored records: what each source produced and how much
+    of it survived triage. 'false_positive' = rejected as not relevant after being retrieved."""
+    providers = [p for (p,) in db.execute(select(Evidence.provider).distinct()).all()]
+    sources: list[dict[str, object]] = []
+    for prov in sorted(providers):
+        ids = [
+            i
+            for (i,) in db.execute(
+                select(OpportunityEvidence.opportunity_id)
+                .join(Evidence, Evidence.id == OpportunityEvidence.evidence_id)
+                .where(Evidence.provider == prov)
+                .distinct()
+            ).all()
+        ]
+        opps = list(db.execute(select(Opportunity).where(Opportunity.id.in_(ids))).scalars())
+        with_route = (
+            db.execute(
+                select(func.count(func.distinct(ContactRoute.opportunity_id))).where(
+                    ContactRoute.opportunity_id.in_(ids)
+                )
+            ).scalar_one()
+            if ids
+            else 0
+        )
+        spend = db.execute(
+            select(func.coalesce(func.sum(ProviderSpend.amount_usd), 0)).where(
+                ProviderSpend.provider == prov
+            )
+        ).scalar_one()
+        sources.append(
+            {
+                "source": prov,
+                "is_mock": prov.startswith("mock"),
+                "records": len(opps),
+                "actionable": sum(o.triage == Triage.ACTIONABLE for o in opps),
+                "needs_verification": sum(o.triage == Triage.NEEDS_VERIFICATION for o in opps),
+                "rejected": sum(o.triage == Triage.REJECTED for o in opps),
+                "false_positives": sum(
+                    o.triage == Triage.REJECTED and "not_relevant" in (o.rejection_reason or "")
+                    for o in opps
+                ),
+                "expired_or_awarded": sum(
+                    o.triage == Triage.REJECTED
+                    and any(k in (o.rejection_reason or "") for k in ("closed", "awarded"))
+                    for o in opps
+                ),
+                "missing_contact_route": len(opps) - int(with_route),
+                "cost_usd": float(spend),
+            }
+        )
+    cands = db.execute(
+        select(SourceCandidate.origin, SourceCandidate.status, func.count()).group_by(
+            SourceCandidate.origin, SourceCandidate.status
+        )
+    ).all()
+    candidates: dict[str, dict[str, int]] = {}
+    for origin, status, n in cands:
+        candidates.setdefault(origin, {})[status] = int(n)
+    return {"sources": sources, "candidates": candidates}
 
 
 @router.post("/runs/{run_id}/cancel", response_model=RunOut, dependencies=[OPERATOR])

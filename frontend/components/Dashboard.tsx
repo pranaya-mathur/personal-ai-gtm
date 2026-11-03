@@ -2,19 +2,23 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  api, splitReal, groupByCategory,
+  api, splitReal,
   runProgress, type AiStatus, type AiUsage, type Connector, type Draft, type Evidence, type Metrics,
-  type BoardRow, type CostSummary, type Profile, type Run,
+  type BoardRow, type CostSummary, type Filters, NO_FILTERS, applyFilters, type Profile, type Run, type RouteRow, type SourcePerformance,
 } from "@/lib/api";
-import { CostPanel, OperationsView, RecordsView, ResearchDetail } from "./Views";
+import { ContactsView, CostPanel, FilterBar, OperationsView, RecordsView, ResearchDetail, SourcesView, SpendView } from "./Views";
 
-type Tab = "overview" | "active" | "verify" | "partnerships" | "potential" | "rejected" | "operations" | "research";
+type Tab =
+  | "overview" | "projects" | "agencies" | "partners" | "verify" | "contacts"
+  | "sources" | "spend" | "rejected" | "operations" | "research";
 const TABS: [Tab, string][] = [
-  ["overview", "Overview"], ["active", "Confirmed active AI projects"],
-  ["verify", "Relevant, needs verification"], ["partnerships", "Verified partnerships"],
-  ["potential", "Potential agency partners"], ["rejected", "Rejected / off-topic"],
-  ["operations", "Discovery operations"], ["research", "Research detail"],
+  ["overview", "Overview"], ["projects", "Active AI implementation opportunities"],
+  ["agencies", "Agencies seeking delivery partners"], ["partners", "Verified & potential agency partners"],
+  ["verify", "Relevant, needs verification"], ["contacts", "Contact routes & next actions"],
+  ["sources", "Discovery sources"], ["spend", "OpenAI & provider spend"],
+  ["rejected", "Rejected / unqualified"], ["operations", "Discovery operations"], ["research", "Research detail"],
 ];
+const FILTERED: Tab[] = ["projects", "agencies", "partners", "verify", "rejected"];
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
@@ -33,15 +37,18 @@ export default function Dashboard() {
   const [tab, setTab] = useState<Tab>("overview");
   const [selected, setSelected] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [routes, setRoutes] = useState<RouteRow[]>([]);
+  const [sources, setSources] = useState<SourcePerformance | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [m, o, r, d, e, c, p, ai, au, b, co] = await Promise.all([
+      const [m, o, r, d, e, c, p, ai, au, b, co, ro, so] = await Promise.all([
         api.metrics(), api.opportunities(), api.runs(), api.drafts(),
         api.evidence(), api.connectors(), api.profiles(), api.aiStatus(), api.aiUsage(),
-        api.board(), api.costs(),
+        api.board(), api.costs(), api.routes(), api.sources(),
       ]);
-      setBoard(b); setCosts(co); setLoaded(true);
+      setBoard(b); setCosts(co); setRoutes(ro); setSources(so); setLoaded(true);
       setMetrics(m); setOpps(o); setRuns(r); setDrafts(d);
       setEvidence(e); setConnectors(c); setProfiles(p); setAiStatus(ai); setAiUsage(au); setError(null);
     } catch (e) {
@@ -55,11 +62,13 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [load]);
 
+  const shown = applyFilters(board, filters);
   const open = (id: string) => { setSelected(id); setTab("research"); };
   const { real } = splitReal(board);
   const realCount = real.length;
   const count = (v: BoardRow["view"]) => real.filter((r) => r.view === v).length;
   const confirmed = count("active_project");
+  const agenciesSeeking = count("agency_seeking");
   const partners = count("verified_partnership");
   const pending = count("needs_verification");
 
@@ -90,21 +99,25 @@ export default function Dashboard() {
         ))}
       </nav>
 
-      {tab === "active" && <RecordsView rows={board} view="active_project" onOpen={open}
-        title="Confirmed active AI projects"
-        blurb="Open, relevant external requirements with a buyer contact route. Eligibility items may still be unverified; nothing here is human-verified until you verify it." />}
-      {tab === "verify" && <RecordsView rows={board} view="needs_verification" onOpen={open}
+      {FILTERED.includes(tab) && <FilterBar f={filters} set={setFilters} />}
+      {tab === "projects" && <RecordsView rows={shown} view="active_project" onOpen={open}
+        title="Active AI implementation opportunities"
+        blurb="Open, relevant requests from direct buyers with a usable contact route. Eligibility items may still be unverified; nothing is human-verified until you verify it." />}
+      {tab === "agencies" && <RecordsView rows={shown} view="agency_seeking" onOpen={open}
+        title="Agencies seeking delivery partners"
+        blurb="Agency posts that state a need for external AI delivery capacity. Each must be confirmed as current by a person; a page or post alone is not proof the need is still open." />}
+      {tab === "partners" && <RecordsView rows={shown} view={["verified_partnership", "potential_partner"]} onOpen={open}
+        title="Verified existing models and potential agency partners"
+        blurb="Verified = the source evidences a subcontracting / white-label model (no current project implied). Potential = the agency exists; no evidence of demand." />}
+      {tab === "verify" && <RecordsView rows={shown} view="needs_verification" onOpen={open}
         title="Technically relevant, requiring verification"
         blurb="Plausibly AI-related, but something is unconfirmed (open status, scope, contact route). Not counted as active projects." />}
-      {tab === "partnerships" && <RecordsView rows={board} view="verified_partnership" onOpen={open}
-        title="Verified delivery partnerships"
-        blurb="Sources evidencing a subcontracting / white-label / partner delivery model. No current project is implied." />}
-      {tab === "potential" && <RecordsView rows={board} view="potential_partner" onOpen={open}
-        title="Potential agency partners"
-        blurb="Agencies that exist and offer complementary services. No evidence of demand or external delivery: do not assume a need." />}
-      {tab === "rejected" && <RecordsView rows={board} view="rejected" onOpen={open}
-        title="Rejected / off-topic"
-        blurb="Kept for audit with the reason (not relevant, closed, awarded). Evidence is preserved." />}
+      {tab === "rejected" && <RecordsView rows={shown} view={["rejected", "unqualified_signal"]} onOpen={open}
+        title="Rejected and unqualified records"
+        blurb="Kept for audit with the reason (not relevant, closed, awarded, or a signal that states no need). Evidence is preserved." />}
+      {tab === "contacts" && <ContactsView routes={routes} onOpen={open} />}
+      {tab === "sources" && <SourcesView data={sources} />}
+      {tab === "spend" && <SpendView costs={costs} usage={aiUsage} />}
       {tab === "operations" && (
         <OperationsView runs={runs} onCancel={async (id) => { await api.cancelRun(id); await load(); }} />
       )}
@@ -114,6 +127,7 @@ export default function Dashboard() {
       <section className="grid stats">
         <div className="card stat"><span className="muted">Real opportunities</span><b>{realCount}</b></div>
         <div className="card stat"><span className="muted">Confirmed active AI projects</span><b>{confirmed}</b></div>
+        <div className="card stat"><span className="muted">Agencies seeking partners (unconfirmed)</span><b>{agenciesSeeking}</b></div>
         <div className="card stat"><span className="muted">Verified delivery partnerships</span><b>{partners}</b></div>
         <div className="card stat"><span className="muted">Relevant, needs verification</span><b>{pending}</b></div>
       </section>
@@ -141,7 +155,8 @@ export default function Dashboard() {
       <section className="card">
         <h2>Where records stand (real records only)</h2>
         <ul>
-          <li>Confirmed active AI projects: {count("active_project")}</li>
+          <li>Active AI implementation opportunities: {count("active_project")}</li>
+          <li>Agencies seeking delivery partners: {count("agency_seeking")}</li>
           <li>Relevant, needs verification: {count("needs_verification")}</li>
           <li>Verified delivery partnerships: {count("verified_partnership")}</li>
           <li>Potential agency partners: {count("potential_partner")}</li>
