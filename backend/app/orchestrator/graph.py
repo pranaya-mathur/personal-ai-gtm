@@ -17,7 +17,10 @@ from app.agents.outreach import OutreachIntelligenceAgent
 from app.agents.qualification import QualificationAgent
 from app.agents.research import ResearchEvidenceAgent
 from app.connectors.base import DiscoveryConnector, DiscoveryQuery
+from app.core.config import Settings
 from app.core.logging import get_logger
+from app.services.source_check import SourceChecker
+from app.services.source_verification import verify_sources
 from app.services.spend import SpendGuard
 
 log = get_logger(__name__)
@@ -25,6 +28,7 @@ log = get_logger(__name__)
 NODE_ORDER = [
     "opportunity_intelligence",
     "agency_partnership_intelligence",
+    "source_verification",
     "research_evidence",
     "qualification",
     "outreach_intelligence",
@@ -37,6 +41,7 @@ class WorkflowState(TypedDict, total=False):
     query: dict[str, Any]
     opportunity_ids: list[str]
     errors: list[str]
+    source_checks: dict[str, Any]
     research: dict[str, dict[str, Any]]
     qualified: dict[str, dict[str, Any]]
     draft_ids: list[str]
@@ -48,6 +53,8 @@ def build_graph(
     session: Session,
     connectors: list[DiscoveryConnector],
     spend: SpendGuard,
+    settings: Settings,
+    checker: SourceChecker | None = None,
 ) -> Any:
     def step(name: str, fn: Callable[[WorkflowState], dict[str, Any]]) -> Callable[..., Any]:
         def wrapped(state: WorkflowState) -> dict[str, Any]:
@@ -72,6 +79,14 @@ def build_graph(
 
         return run
 
+    def source_verification(state: WorkflowState) -> dict[str, Any]:
+        if not settings.source_verification_enabled:
+            return {"source_checks": {"skipped": "SOURCE_VERIFICATION_ENABLED=false"}}
+        results = verify_sources(
+            session, state.get("opportunity_ids", []), checker or SourceChecker()
+        )
+        return {"source_checks": results}
+
     def research(state: WorkflowState) -> dict[str, Any]:
         return {"research": ResearchEvidenceAgent(session).run(state.get("opportunity_ids", []))}
 
@@ -87,6 +102,7 @@ def build_graph(
     impl: dict[str, Callable[[WorkflowState], dict[str, Any]]] = {
         "opportunity_intelligence": discovery(OpportunityIntelligenceAgent),
         "agency_partnership_intelligence": discovery(AgencyPartnershipIntelligenceAgent),
+        "source_verification": source_verification,
         "research_evidence": research,
         "qualification": qualification,
         "outreach_intelligence": outreach,

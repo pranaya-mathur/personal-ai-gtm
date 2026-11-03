@@ -5,18 +5,31 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.agents.analytics import PipelineAnalyticsAgent
-from app.connectors.registry import build_connectors
+from app.connectors.apify_specs import SPECS
+from app.connectors.base import DiscoveryQuery
+from app.connectors.registry import known_connectors
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models import Evidence, Opportunity, OpportunityEvidence, OutreachDraft, WorkflowRun
+from app.models import (
+    Evidence,
+    Opportunity,
+    OpportunityEvidence,
+    OutreachDraft,
+    SearchProfile,
+    WorkflowRun,
+)
 from app.models.enums import OpportunityCategory, OutreachStatus, VerificationStatus
 from app.orchestrator.runner import enqueue_run
 from app.schemas.api import (
     ApprovalRequest,
     DraftOut,
     DraftUpdate,
+    EvidenceOut,
     OpportunityDetail,
     OpportunityOut,
+    ProfileCreate,
+    ProfileOut,
+    ProfileUpdate,
     RunCreate,
     RunOut,
 )
@@ -38,15 +51,91 @@ def ready(db: Session = Depends(get_db)) -> dict[str, str]:
 
 @router.get("/connectors")
 def connectors() -> list[dict[str, object]]:
-    return [
-        {"name": c.name, "is_mock": c.is_mock, "kinds": sorted(k.value for k in c.kinds)}
-        for c in build_connectors(get_settings().enabled_connector_names)
-    ]
+    """All known providers with whether they are enabled, free, and approved to spend."""
+    settings = get_settings()
+    enabled = set(settings.enabled_connector_names)
+    out: list[dict[str, object]] = []
+    for name in known_connectors():
+        spec = SPECS.get(name)
+        out.append(
+            {
+                "name": name,
+                "enabled": name in enabled,
+                "is_mock": spec is None,
+                "paid": spec is not None,
+                "usable": spec is None or spec.reviewed,
+                "paid_execution_approved": settings.apify_paid_execution_approved if spec else None,
+                "actor_id": spec.actor_id if spec else None,
+                "schema_validated_on": spec.validated_on if spec else None,
+                "notes": spec.notes if spec else "offline fixture data",
+            }
+        )
+    return out
+
+
+@router.get("/search-profiles", response_model=list[ProfileOut])
+def list_profiles(db: Session = Depends(get_db)) -> list[SearchProfile]:
+    return list(db.execute(select(SearchProfile).order_by(SearchProfile.name)).scalars())
+
+
+@router.post("/search-profiles", response_model=ProfileOut, status_code=201)
+def create_profile(body: ProfileCreate, db: Session = Depends(get_db)) -> SearchProfile:
+    unknown = [c for c in body.connector_names if c not in known_connectors()]
+    if unknown:
+        raise HTTPException(422, f"unknown connectors: {unknown}")
+    if db.execute(select(SearchProfile).where(SearchProfile.name == body.name)).first():
+        raise HTTPException(409, "a profile with that name exists")
+    profile = SearchProfile(**body.model_dump())
+    db.add(profile)
+    db.commit()
+    return profile
+
+
+@router.patch("/search-profiles/{profile_id}", response_model=ProfileOut)
+def update_profile(
+    profile_id: uuid.UUID, body: ProfileUpdate, db: Session = Depends(get_db)
+) -> SearchProfile:
+    profile = db.get(SearchProfile, profile_id)
+    if profile is None:
+        raise HTTPException(404, "profile not found")
+    for key, value in body.model_dump(exclude_none=True).items():
+        setattr(profile, key, value)
+    db.commit()
+    return profile
+
+
+@router.get("/evidence", response_model=list[EvidenceOut])
+def list_evidence(run_id: uuid.UUID | None = None, db: Session = Depends(get_db)) -> list[Evidence]:
+    stmt = select(Evidence).order_by(Evidence.retrieved_at.desc()).limit(200)
+    if run_id:
+        stmt = stmt.where(Evidence.run_id == run_id)
+    return list(db.execute(stmt).scalars())
 
 
 @router.post("/runs", response_model=RunOut, status_code=202)
 def create_run(body: RunCreate, db: Session = Depends(get_db)) -> WorkflowRun:
-    return enqueue_run(db, body.kind, {"query": body.query.model_dump()})
+    query = body.query
+    if body.profile_id is not None:
+        profile = db.get(SearchProfile, body.profile_id)
+        if profile is None:
+            raise HTTPException(404, "profile not found")
+        if not profile.enabled:
+            raise HTTPException(409, "profile is disabled")
+        query = DiscoveryQuery(
+            keywords=profile.keywords,
+            regions=profile.regions,
+            max_results=profile.max_results,
+            max_age_days=profile.max_age_days,
+            connector_names=profile.connector_names or None,
+        )
+    return enqueue_run(
+        db,
+        body.kind,
+        {
+            "query": query.model_dump(),
+            "profile_id": str(body.profile_id) if body.profile_id else None,
+        },
+    )
 
 
 @router.get("/runs", response_model=list[RunOut])

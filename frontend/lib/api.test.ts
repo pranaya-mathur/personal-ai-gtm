@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupByCategory, type Opportunity } from "./api";
+import { groupByCategory, runProgress, type Opportunity, type Run } from "./api";
 
 const o = (id: string, category: Opportunity["category"]): Opportunity => ({
   id, category, title: id, status: "new", verification_status: "unverified",
@@ -12,5 +12,17 @@ describe("groupByCategory", () => {
     expect(g.confirmed_demand.map((x) => x.id)).toEqual(["a"]);
     expect(g.speculative_prospect.map((x) => x.id)).toEqual(["b"]);
     expect(g.verified_partnership).toEqual([]);
+  });
+});
+
+describe("runProgress", () => {
+  const run = (nodes: string[]): Run => ({
+    id: "r", kind: "k", status: "running", attempts: 1, error: null,
+    created_at: "2026-01-01T00:00:00Z", state: { completed_nodes: nodes },
+  });
+  it("reports percent of workflow nodes completed", () => {
+    expect(runProgress(run([]))).toBe(0);
+    expect(runProgress(run(["a", "b", "c"]))).toBe(43);
+    expect(runProgress(run(Array(7).fill("x")))).toBe(100);
   });
 });

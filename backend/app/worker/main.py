@@ -21,7 +21,7 @@ def main() -> None:
     configure_logging(settings.log_level)
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    connectors = build_connectors(settings.enabled_connector_names)
+    connectors = build_connectors(settings.enabled_connector_names, settings)
     factory = get_session_factory()
     log.info("worker_started", connectors=[c.name for c in connectors])
     while _running:

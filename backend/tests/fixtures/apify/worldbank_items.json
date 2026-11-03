@@ -1,0 +1,14 @@
+[
+  {"id": "wb-1", "projectName": "Machine learning platform for agricultural monitoring",
+   "projectId": "P000001", "bidReference": "REOI-001",
+   "bidDescription": "Request for Expression of Interest for an ML analytics platform.",
+   "detailUrl": "https://wb.example/notice/wb-1", "noticeDate": "2026-10-20",
+   "noticeType": "Request for Expression of Interest", "country": "Kenya",
+   "contactOrganization": "Example Ministry of Agriculture", "contactName": "Sam Sample",
+   "contactEmail": "procurement@agri.example", "source": "worldbank"},
+  {"id": "wb-2", "projectName": "Machine learning platform for agricultural monitoring",
+   "projectId": "P000001", "bidDescription": "Request for Expression of Interest for an ML analytics platform.",
+   "detailUrl": "https://wb.example/notice/wb-1/", "noticeDate": "2026-10-20",
+   "country": "Kenya", "contactOrganization": "Example Ministry of Agriculture",
+   "contactName": "", "contactEmail": "not-an-email"}
+]

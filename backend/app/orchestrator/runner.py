@@ -12,6 +12,7 @@ from app.core.logging import get_logger
 from app.models import WorkflowRun
 from app.models.enums import RunStatus
 from app.orchestrator.graph import WorkflowState, build_graph
+from app.services.source_check import SourceChecker
 from app.services.spend import SpendGuard
 from app.utils import utcnow
 
@@ -69,11 +70,12 @@ def execute_run(
     run_id: uuid.UUID,
     connectors: list[DiscoveryConnector],
     settings: Settings,
+    checker: SourceChecker | None = None,
 ) -> WorkflowRun:
     run = session.get(WorkflowRun, run_id)
     assert run is not None
     try:
-        graph = build_graph(session, connectors, SpendGuard(session, settings))
+        graph = build_graph(session, connectors, SpendGuard(session, settings), settings, checker)
         state: WorkflowState = (
             WorkflowState(**run.state)  # type: ignore[typeddict-item]
             if run.state.get("completed_nodes")

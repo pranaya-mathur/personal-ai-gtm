@@ -18,9 +18,19 @@ class Settings(BaseSettings):
     spend_limit_daily_usd: float = 5.00
     spend_limit_monthly_usd: float = 50.00
 
-    openai_api_key: SecretStr | None = None
-    openai_model: str = ""
+    # LLM: Anthropic Claude is the intended primary provider; "mock" runs offline for free.
+    llm_provider: str = "mock"
+    llm_paid_calls_enabled: bool = False
+    anthropic_api_key: SecretStr | None = None
+    anthropic_model: str = ""
+
+    # Apify: nothing paid runs unless the token is set AND paid execution is approved.
     apify_token: SecretStr | None = None
+    apify_paid_execution_approved: bool = False
+    apify_api_base: str = "https://api.apify.com"
+
+    # Source verification fetches the cited page; off by default (mock URLs are fictional).
+    source_verification_enabled: bool = False
 
     worker_poll_interval_seconds: float = 2.0
     worker_max_attempts: int = 3

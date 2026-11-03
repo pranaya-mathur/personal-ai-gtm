@@ -14,6 +14,36 @@ class ORM(BaseModel):
 class RunCreate(BaseModel):
     kind: str = "full_discovery"
     query: DiscoveryQuery = Field(default_factory=DiscoveryQuery)
+    profile_id: uuid.UUID | None = None  # if set, the saved search profile defines the query
+
+
+class ProfileCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    keywords: list[str] = Field(default_factory=list)
+    regions: list[str] = Field(default_factory=list)
+    connector_names: list[str] = Field(default_factory=list)
+    max_results: int = Field(default=25, ge=1, le=500)
+    max_age_days: int = Field(default=90, ge=1)
+
+
+class ProfileUpdate(BaseModel):
+    enabled: bool | None = None
+    keywords: list[str] | None = None
+    regions: list[str] | None = None
+    connector_names: list[str] | None = None
+    max_results: int | None = Field(default=None, ge=1, le=500)
+    max_age_days: int | None = Field(default=None, ge=1)
+
+
+class ProfileOut(ORM):
+    id: uuid.UUID
+    name: str
+    keywords: list[str]
+    regions: list[str]
+    connector_names: list[str]
+    max_results: int
+    max_age_days: int
+    enabled: bool
 
 
 class RunOut(ORM):
@@ -29,6 +59,7 @@ class RunOut(ORM):
 
 class EvidenceOut(ORM):
     id: uuid.UUID
+    run_id: uuid.UUID | None = None
     provider: str
     source_url: str
     original_text: str
@@ -36,6 +67,8 @@ class EvidenceOut(ORM):
     retrieved_at: datetime
     confidence: float
     verification_status: str
+    source_check_status: str
+    source_checked_at: datetime | None = None
 
 
 class OpportunityOut(ORM):

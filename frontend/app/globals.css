@@ -17,3 +17,7 @@ button { background:var(--accent); color:#fff; border:0; border-radius:8px; padd
 button:disabled { opacity:.5; cursor:default; }
 .err { color:#d92d20; }
 .banner { margin-top:16px; padding:10px 14px; border:1px dashed var(--line); border-radius:8px; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th,td { text-align:left; padding:6px 8px; border-top:1px solid var(--line); vertical-align:top; }
+a { color:var(--accent); }
+.item button { margin-top:6px; padding:3px 10px; font-size:12px; }

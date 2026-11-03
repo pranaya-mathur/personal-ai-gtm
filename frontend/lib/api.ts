@@ -19,6 +19,47 @@ export interface Run {
   attempts: number;
   error: string | null;
   created_at: string;
+  state: { completed_nodes?: string[]; errors?: string[] };
+}
+
+export const TOTAL_NODES = 7;
+
+export interface Evidence {
+  id: string;
+  run_id: string | null;
+  provider: string;
+  source_url: string;
+  original_text: string;
+  published_at: string | null;
+  confidence: number;
+  verification_status: string;
+  source_check_status: string;
+}
+
+export interface Connector {
+  name: string;
+  enabled: boolean;
+  is_mock: boolean;
+  paid: boolean;
+  usable: boolean;
+  paid_execution_approved: boolean | null;
+  actor_id: string | null;
+  schema_validated_on: string | null;
+  notes: string;
+}
+
+export interface Profile {
+  id: string;
+  name: string;
+  keywords: string[];
+  regions: string[];
+  connector_names: string[];
+  max_results: number;
+  enabled: boolean;
+}
+
+export function runProgress(r: Run): number {
+  return Math.min(100, Math.round(((r.state.completed_nodes?.length ?? 0) / TOTAL_NODES) * 100));
 }
 
 export interface Draft {
@@ -57,7 +98,14 @@ export const api = {
   runs: () => request<Run[]>("/runs"),
   opportunities: () => request<Opportunity[]>("/opportunities"),
   drafts: () => request<Draft[]>("/drafts?status=pending_approval"),
-  startRun: () => request<Run>("/runs", { method: "POST", body: "{}" }),
+  startRun: (profileId?: string) =>
+    request<Run>("/runs", {
+      method: "POST",
+      body: JSON.stringify(profileId ? { profile_id: profileId } : {}),
+    }),
+  evidence: () => request<Evidence[]>("/evidence"),
+  connectors: () => request<Connector[]>("/connectors"),
+  profiles: () => request<Profile[]>("/search-profiles"),
 };
 
 export function groupByCategory(items: Opportunity[]): Record<Category, Opportunity[]> {

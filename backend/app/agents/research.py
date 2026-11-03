@@ -43,6 +43,7 @@ class ResearchEvidenceAgent:
                 "has_source_url": all(bool(e.source_url) for e in evs) and bool(evs),
                 "has_publication_date": all(e.published_at is not None for e in evs) and bool(evs),
                 "all_fresh": all(e.verification_status != VerificationStatus.STALE for e in evs),
+                "source_confirmed": any(e.source_check_status == "confirmed" for e in evs),
                 "known_contacts": contacts,
             }
         return report

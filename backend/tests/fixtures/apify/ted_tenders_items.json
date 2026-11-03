@@ -1,0 +1,15 @@
+[
+  {"title": "Development of an AI knowledge assistant for citizen services",
+   "detailUrl": "https://ted.example/notice/100001-2026?utm_source=feed",
+   "description": "The authority seeks a contractor to design and deliver a retrieval-based assistant.",
+   "publicationDate": "2026-10-28", "deadlineDate": "2099-01-31",
+   "buyerName": "Example City Council", "buyerCountry": "DEU", "noticeType": "cn",
+   "noticeSubtype": "16", "publicationNumber": "100001-2026", "cpvCodes": ["72000000"],
+   "xmlUrl": "https://ted.example/xml/100001-2026", "scrapedAt": "2026-11-03T00:00:00Z"},
+  {"title": "Legacy ERP maintenance",
+   "detailUrl": "https://ted.example/notice/100002-2026",
+   "description": "Closed tender.", "publicationDate": "2026-08-01", "deadlineDate": "2026-09-01",
+   "buyerName": "Example Ministry", "buyerCountry": "FRA", "noticeType": "cn"},
+  {"title": "Notice without a source link", "description": "No detailUrl present.",
+   "publicationDate": "2026-10-30", "buyerName": "Nameless Buyer", "buyerCountry": "ITA"}
+]

@@ -39,7 +39,7 @@ def test_dedupe_keys_normalise() -> None:
     b = opportunity_dedupe_key("confirmed_demand", "acme.com", "build a rag bot")
     assert a == b
     assert a != opportunity_dedupe_key("speculative_prospect", "acme.com", "build a rag bot")
-    assert evidence_hash("p", "https://A/x", " t ") == evidence_hash("p", "https://a/x", "t")
+    assert evidence_hash("https://a.example/x/", " t ") == evidence_hash("https://A.example/x", "t")
 
 
 def test_freshness() -> None:

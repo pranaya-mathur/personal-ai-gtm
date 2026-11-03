@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
@@ -23,6 +24,7 @@ from app.models.enums import (
     OrganizationKind,
     OutreachStatus,
     RunStatus,
+    SourceCheckStatus,
     VerificationStatus,
 )
 
@@ -63,6 +65,10 @@ class Evidence(Base, IdMixin):
             _enum_check("verification_status", VerificationStatus),
             name="ck_evidence_verification_status",
         ),
+        CheckConstraint(
+            _enum_check("source_check_status", SourceCheckStatus),
+            name="ck_evidence_source_check_status",
+        ),
     )
 
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -78,6 +84,11 @@ class Evidence(Base, IdMixin):
     )
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("workflow_runs.id"))
+    # Did the cited page actually contain the claim? Distinct from human verification.
+    source_check_status: Mapped[str] = mapped_column(
+        String(24), default=SourceCheckStatus.NOT_CHECKED, nullable=False
+    )
+    source_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Organization(Base, IdMixin, TimestampMixin):
@@ -249,3 +260,21 @@ class ProviderSpend(Base, IdMixin):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
+
+
+class SearchProfile(Base, IdMixin, TimestampMixin):
+    """A saved, configurable worldwide search: terms, regions and providers."""
+
+    __tablename__ = "search_profiles"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_search_profiles_name"),
+        CheckConstraint("max_results >= 1 AND max_results <= 500", name="ck_profiles_max_results"),
+    )
+
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    keywords: Mapped[list] = mapped_column(JsonType, default=list, nullable=False)  # type: ignore[type-arg]
+    regions: Mapped[list] = mapped_column(JsonType, default=list, nullable=False)  # type: ignore[type-arg]
+    connector_names: Mapped[list] = mapped_column(JsonType, default=list, nullable=False)  # type: ignore[type-arg]
+    max_results: Mapped[int] = mapped_column(Integer, default=25, nullable=False)
+    max_age_days: Mapped[int] = mapped_column(Integer, default=90, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

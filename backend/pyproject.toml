@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [dependency-groups]
+llm = ["anthropic>=0.40"]
 dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10"]
 
 [tool.pytest.ini_options]
@@ -38,3 +39,7 @@ extend-immutable-calls = ["fastapi.Depends"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["anthropic"]
+ignore_missing_imports = true

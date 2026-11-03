@@ -25,6 +25,7 @@ class DiscoveryQuery(BaseModel):
     regions: list[str] = Field(default_factory=list)
     max_results: int = Field(default=25, ge=1, le=500)
     max_age_days: int = Field(default=90, ge=1)
+    connector_names: list[str] | None = None  # restrict a run to specific providers
 
 
 class RawContact(BaseModel):

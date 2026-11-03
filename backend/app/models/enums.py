@@ -54,3 +54,11 @@ class DealStage(enum.StrEnum):
     NEGOTIATION = "negotiation"
     WON = "won"
     LOST = "lost"
+
+
+class SourceCheckStatus(enum.StrEnum):
+    NOT_CHECKED = "not_checked"
+    CONFIRMED = "confirmed"  # cited page was fetched and contains the claim
+    MISMATCH = "mismatch"  # page fetched but claim not found
+    UNREACHABLE = "unreachable"
+    BLOCKED = "blocked"  # robots.txt disallows, or URL failed safety checks

@@ -20,7 +20,8 @@ def score_opportunity(
     criteria = {
         "category_weight": CATEGORY_WEIGHT[OpportunityCategory(category)] * 40,
         "source_confidence": confidence * 25,
-        "freshness": 20.0 if research.get("all_fresh") else 0.0,
+        "freshness": 15.0 if research.get("all_fresh") else 0.0,
+        "source_confirmed": 5.0 if research.get("source_confirmed") else 0.0,
         "dated_and_sourced": 10.0
         if research.get("has_publication_date") and research.get("has_source_url")
         else 0.0,

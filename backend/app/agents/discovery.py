@@ -43,6 +43,8 @@ class _DiscoveryAgent:
         errors: list[str] = []
         created = stale = 0
         for connector in self.connectors:
+            if query.connector_names is not None and connector.name not in query.connector_names:
+                continue
             try:
                 self.spend.check(connector.estimate_cost(query).usd, run_id)
                 result = self._call(connector, query)

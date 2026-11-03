@@ -9,6 +9,7 @@ from app.models.entities import (
     OutreachDraft,
     ProviderSpend,
     Qualification,
+    SearchProfile,
     WorkflowRun,
 )
 
@@ -23,5 +24,6 @@ __all__ = [
     "OutreachDraft",
     "ProviderSpend",
     "Qualification",
+    "SearchProfile",
     "WorkflowRun",
 ]

@@ -13,10 +13,16 @@ from app.models.enums import (
     OrganizationKind,
     VerificationStatus,
 )
-from app.services.dedupe import evidence_hash, is_fresh, opportunity_dedupe_key
+from app.services.dedupe import (
+    evidence_hash,
+    is_fresh,
+    opportunity_dedupe_key,
+    title_similarity,
+)
 from app.utils import utcnow
 
 log = get_logger(__name__)
+NEAR_DUPLICATE_THRESHOLD = 0.8
 
 
 def classify(finding: RawFinding) -> OpportunityCategory:
@@ -77,7 +83,7 @@ def ingest_finding(
     )
     org = _upsert_org(session, finding, org_kind)
 
-    ev_hash = evidence_hash(provider, finding.source_url, finding.original_text)
+    ev_hash = evidence_hash(finding.source_url, finding.original_text)
     evidence = session.execute(
         select(Evidence).where(Evidence.content_hash == ev_hash)
     ).scalar_one_or_none()
@@ -102,6 +108,16 @@ def ingest_finding(
     opp = session.execute(
         select(Opportunity).where(Opportunity.dedupe_key == key)
     ).scalar_one_or_none()
+    if opp is None and org is not None:
+        # near-duplicate: same org + category, almost identical title (e.g. reposted/reworded)
+        for cand in session.execute(
+            select(Opportunity).where(
+                Opportunity.organization_id == org.id, Opportunity.category == category
+            )
+        ).scalars():
+            if title_similarity(cand.title, finding.title) >= NEAR_DUPLICATE_THRESHOLD:
+                opp = cand
+                break
     created = opp is None
     if opp is None:
         opp = Opportunity(
