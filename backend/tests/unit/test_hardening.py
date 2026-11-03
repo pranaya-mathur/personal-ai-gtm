@@ -408,7 +408,7 @@ def test_query_outcomes_are_persisted_attributed_and_change_future_ordering(sess
     spend = SpendGuard(session, s.model_copy(update={"search_budget_usd": 5.0}))
     first_order = [p.text for p in conn.planned()]
     wf = uuid.uuid4()
-    for i in range(3):  # repeated execution
+    for _i in range(3):  # repeated execution
         from app.models import WorkflowRun as WR
 
         wf = uuid.uuid4()
@@ -610,3 +610,189 @@ def test_published_addresses_are_classified_and_never_assumed_to_be_decision_mak
     assert route_class("email", "j.doe@acme.example", None) == "named_person"
     assert route_authority("named_person", False)[0] == "unconfirmed"
     assert route_class("inquiry_form", "https://acme.example/contact", None) == "inquiry_form"
+
+
+# ---------------------------------------------------------------- round 2: role enforcement
+from tests.conftest import ADMIN_TOKEN, OPERATOR_TOKEN, VIEWER_TOKEN  # noqa: E402
+
+
+def _as(api, token):  # type: ignore[no-untyped-def]
+    api.headers["Authorization"] = f"Bearer {token}" if token else ""
+    return api
+
+
+def _draft_and_proposal(api):  # type: ignore[no-untyped-def]
+    with api.factory() as s:
+        opp = _intake(s)
+        s.commit()
+        oid = str(opp.id)
+    api.post(f"/opportunities/{oid}/verify")
+    did = api.post(f"/opportunities/{oid}/draft").json()["draft_id"]
+    api.patch(f"/drafts/{did}", json={"body": "Hello, SANDBOX text without brackets."})
+    pid = api.post(f"/opportunities/{oid}/proposal").json()["id"]
+    api.patch(f"/proposals/{pid}", json={"body": "Plain proposal body.", "price_text": "5000 USD"})
+    return did, pid
+
+
+def test_operator_and_viewer_cannot_approve_or_change_schedules_admin_can(api) -> None:  # type: ignore[no-untyped-def]
+    did, pid = _draft_and_proposal(api)
+    for tok, code in ((OPERATOR_TOKEN, 403), (VIEWER_TOKEN, 403), ("", 401), ("x" * 24, 401)):
+        a = _as(api, tok)
+        assert a.post(f"/drafts/{did}/approve").status_code == code
+        assert a.post(f"/proposals/{pid}/approve").status_code == code
+        assert a.patch("/schedules/ted_api", json={"enabled": False}).status_code == code
+    a = _as(api, ADMIN_TOKEN)
+    assert a.post(f"/drafts/{did}/approve").status_code == 200
+    assert a.post(f"/proposals/{pid}/approve").json()["approved_by"] == "alice"
+
+
+def test_viewer_cannot_mutate_anything(api) -> None:  # type: ignore[no-untyped-def]
+    a = _as(api, VIEWER_TOKEN)
+    assert a.post("/runs", json={}).status_code == 403
+    assert a.get("/schedules").status_code == 200
+
+
+# ---------------------------------------------------------------- round 2: scheduler controls
+def test_schedule_controls_and_free_only_enforcement_via_api(api, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ENABLED_CONNECTORS", "ted_api,apify_intent_search")
+    get_settings.cache_clear()
+    a = _as(api, VIEWER_TOKEN)
+    rows = {r["connector"]: r for r in a.get("/schedules").json()["sources"]}
+    assert rows["apify_intent_search"]["paid"] and not rows["apify_intent_search"]["enabled"]
+    a = _as(api, ADMIN_TOKEN)
+    assert a.patch("/schedules/apify_intent_search", json={"enabled": True}).status_code == 409
+    assert a.patch("/schedules/ted_api", json={"enabled": False}).json()["enabled"] is False
+    assert (
+        a.patch("/schedules/ted_api", json={"enabled": True, "interval_minutes": 5}).status_code
+        == 422
+    )
+    assert a.patch("/schedules/nope", json={"enabled": True}).status_code == 404
+
+
+def test_disabled_source_is_not_scheduled_and_restart_recovers_without_double_run(session) -> None:  # type: ignore[no-untyped-def]
+    s = _sched_settings()
+    ensure_schedules(session, s)
+    off = session.execute(
+        select(SourceSchedule).where(SourceSchedule.connector == "canadabuys")
+    ).scalar_one()
+    off.enabled = False
+    session.flush()
+    run = schedule_tick(session, s)
+    assert "canadabuys" not in run.input["query"]["connector_names"]
+    # worker dies mid-run (lease lapses); a restarted worker reclaims the SAME run, and the
+    # scheduler does not enqueue a second one while it is unfinished
+    claimed = claim_next_run(session, "w1", s)
+    claimed.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    session.commit()
+    assert schedule_tick(session, s) is None
+    again = claim_next_run(session, "w2", s)
+    assert again.id == run.id and again.attempts == 2
+    assert len(list(session.execute(select(WorkflowRun)).scalars())) == 1
+
+
+# ---------------------------------------------------------------- round 2: billing fixtures
+def test_finalized_billing_fixture_with_two_runs_and_one_uncertain(session) -> None:  # type: ignore[no-untyped-def]
+    from app.cli.reconcile import reconcile
+
+    sp = ProviderSpend(provider="apify:x", amount_usd=1.0, description="reserved")
+    session.add(sp)
+    session.flush()
+    session.add_all([
+        ProviderRun(provider="x", actor="a", idempotency_key="k1", spend_id=sp.id, external_id="R1", status="submitted"),
+        ProviderRun(provider="x", actor="a", idempotency_key="k2", spend_id=sp.id, external_id="R2", status="submitted"),
+        ProviderRun(provider="x", actor="a", idempotency_key="k3", spend_id=sp.id, status="unknown"),
+    ])  # fmt: skip
+    session.flush()
+    fixtures = {
+        "R1": {"id": "R1", "status": "SUCCEEDED", "usageTotalUsd": 0.00005, "chargedEventCounts": {"result": 20},
+               "pricingInfo": {"pricingPerEvent": {"actorChargeEvents": {"result": {"eventPriceUsd": 0.0038}}}}},
+        "R2": {"id": "R2", "status": "SUCCEEDED", "usageTotalUsd": 0.0451},
+    }  # fmt: skip
+    posts: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        posts.append(req.method)
+        return httpx.Response(200, json={"data": fixtures[req.url.path.rsplit("/", 1)[-1]]})
+
+    client = ApifyClient(SecretStr("t"), transport=httpx.MockTransport(handler))
+    res = reconcile(session, client, apply=True)
+    assert set(posts) == {"GET"}
+    assert any("UNRESOLVED" in str(e["action"]) for e in res)
+    runs = {
+        r.external_id: r for r in session.execute(select(ProviderRun)).scalars() if r.external_id
+    }
+    assert float(runs["R1"].charged_usd) == 0.076 and runs["R1"].cost_basis == "events"
+    assert float(runs["R2"].charged_usd) == 0.0451 and runs["R2"].cost_basis == "usage"
+    # one run is unresolved, so the reservation is NOT replaced by a partial sum
+    assert float(sp.amount_usd) == 1.0
+
+
+# ---------------------------------------------------------------- round 2: semantic judge (mocked)
+def _judge_fixture():  # type: ignore[no-untyped-def]
+    from app.ai.prompts import EvidenceItem
+    from app.ai.tasks import AITasks
+
+    ev = "We need remote work, which may be possible, for our AI chatbot project."
+    claim = _claim(
+        "Remote work is required for the AI project", "remote work, which may be possible"
+    )
+    d = AS.OpportunityDossier(
+        summary="s", requirements=[claim], budget=None, deadline=None, ai_project="explicit",
+        ai_project_support=claim, verdict="supported", reliability=0.7, findings=[claim],
+        open_questions=[], fit_score=70.0, risks=[], external_delivery="unclear",
+        small_team_fit="unclear", suggested_next_action="read",
+    )  # fmt: skip
+    t = AITasks.__new__(AITasks)
+    t.evidence_for = lambda opp: [EvidenceItem("e1", "u", ev)]  # type: ignore[method-assign]
+    return t, d
+
+
+class _GW:
+    def __init__(self, enabled: bool, result):  # type: ignore[no-untyped-def]
+        self.settings = Settings(database_url="sqlite://", ai_semantic_check_enabled=enabled)
+        self.result, self.calls = result, 0
+
+    def run_task(self, **kw):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+class _Opp:
+    id = uuid.uuid4()
+
+
+def test_judge_disabled_makes_no_call_and_still_downgrades() -> None:
+    t, d = _judge_fixture()
+    t.gateway = _GW(False, None)  # type: ignore[assignment]
+    out = t._downgrade_unsupported(d, _Opp(), None)  # type: ignore[arg-type]
+    assert t.gateway.calls == 0 and out.ai_project == "implied"  # type: ignore[attr-defined]
+
+
+def test_judge_unsupported_or_missing_verdict_keeps_the_downgrade() -> None:
+    for result in (AS.ClaimJudgements(results=[AS.ClaimJudgement(index=0, supports=False)]), None):
+        t, d = _judge_fixture()
+        t.gateway = _GW(True, result)  # type: ignore[assignment]
+        out = t._downgrade_unsupported(d, _Opp(), None)  # type: ignore[arg-type]
+        assert (
+            t.gateway.calls == 1
+            and out.ai_project == "implied"
+            and out.verdict == "partially_supported"
+        )  # type: ignore[attr-defined]
+
+
+def test_judge_may_clear_an_ambiguous_claim_and_its_failure_propagates() -> None:
+    t, d = _judge_fixture()
+    t.gateway = _GW(True, AS.ClaimJudgements(results=[AS.ClaimJudgement(index=0, supports=True)]))  # type: ignore[assignment]
+    assert t._downgrade_unsupported(d, _Opp(), None).ai_project == "explicit"  # type: ignore[arg-type]
+    from app.services.spend import SpendLimitExceeded
+
+    t.gateway = _GW(True, SpendLimitExceeded("budget"))  # type: ignore[assignment]
+    try:
+        t._downgrade_unsupported(d, _Opp(), None)  # type: ignore[arg-type]
+        raise AssertionError("budget failure must surface, not silently pass")
+    except SpendLimitExceeded:
+        pass

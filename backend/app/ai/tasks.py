@@ -104,8 +104,12 @@ class AITasks:
         doubtful: list[tuple[S.Claim, str]],
         items: list[EvidenceItem],
     ) -> list[tuple[S.Claim, str]]:
-        lines = [f"CLAIM {i}: {c.text}\nQUOTE {i}: {c.quote}" for i, (c, _) in enumerate(doubtful)]
-        wanted = {c.evidence_id for c, _ in doubtful}
+        uniq: dict[tuple[str, str, str], tuple[S.Claim, str]] = {}
+        for c, why in doubtful:  # the same claim often appears in several fields: judge it once
+            uniq.setdefault((c.evidence_id, c.quote, c.text), (c, why))
+        pool = list(uniq.values())
+        lines = [f"CLAIM {i}: {c.text}\nQUOTE {i}: {c.quote}" for i, (c, _) in enumerate(pool)]
+        wanted = {c.evidence_id for c, _ in pool}
         res = self.gateway.run_task(
             task="claim_support_check",
             schema=S.ClaimJudgements,
@@ -120,8 +124,12 @@ class AITasks:
         )
         if res is None:
             return doubtful  # no verdict: stay downgraded
-        cleared = {j.index for j in res.results if j.supports}
-        return [d for i, d in enumerate(doubtful) if i not in cleared]
+        cleared = {
+            (pool[j.index][0].evidence_id, pool[j.index][0].quote, pool[j.index][0].text)
+            for j in res.results
+            if j.supports and 0 <= j.index < len(pool)
+        }
+        return [(c, w) for c, w in doubtful if (c.evidence_id, c.quote, c.text) not in cleared]
 
     def analyze(self, opp: Opportunity, run_id: uuid.UUID | None) -> S.OpportunityAnalysis | None:
         return self._run("opportunity_analysis", S.OpportunityAnalysis, opp, run_id, 1)
