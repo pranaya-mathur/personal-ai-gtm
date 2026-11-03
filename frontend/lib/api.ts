@@ -89,7 +89,10 @@ export interface SourcePerformance {
   sources: {
     source: string; is_mock: boolean; records: number; actionable: number; needs_verification: number;
     rejected: number; false_positives: number; expired_or_awarded: number;
-    missing_contact_route: number; cost_usd: number;
+    missing_contact_route: number; cost_usd: number; retrieved_total: number; duplicates_total: number;
+    runs: number; last_error: string | null; demand_signals: number; usable_opportunities: number;
+    cost_per_usable_usd: number | null; median_age_days: number | null;
+    channels: { agency: number; direct_buyer: number };
   }[];
   candidates: Record<string, Record<string, number>>;
 }

@@ -259,12 +259,16 @@ export function SourcesView({ data }: { data: SourcePerformance | null }) {
         <p className="muted">Built from stored records only. "False positives" = retrieved but rejected as not relevant.</p>
         {data.sources.length === 0 ? <Empty what="source records" /> : (
           <table>
-            <thead><tr><th>Source</th><th>Records</th><th>Actionable</th><th>Needs verification</th><th>Rejected</th><th>False positives</th><th>Expired / awarded</th><th>No contact route</th><th>Cost</th></tr></thead>
+            <thead><tr><th>Source</th><th>Retrieved (all runs)</th><th>Stored</th><th>Demand signals</th><th>Usable (with route)</th><th>False positives</th><th>Expired / awarded</th><th>No contact route</th><th>Median age (days)</th><th>Channel A / B</th><th>Cost</th><th>Cost per usable</th><th>Last problem</th></tr></thead>
             <tbody>{data.sources.map((s) => (
               <tr key={s.source}>
-                <td>{s.source} {s.is_mock && MOCK_BADGE}</td><td>{s.records}</td><td>{s.actionable}</td>
-                <td>{s.needs_verification}</td><td>{s.rejected}</td><td>{s.false_positives}</td>
-                <td>{s.expired_or_awarded}</td><td>{s.missing_contact_route}</td><td>${s.cost_usd.toFixed(4)}</td>
+                <td>{s.source} {s.is_mock && MOCK_BADGE}</td><td>{s.retrieved_total}</td><td>{s.records}</td>
+                <td>{s.demand_signals}</td><td>{s.usable_opportunities}</td><td>{s.false_positives}</td>
+                <td>{s.expired_or_awarded}</td><td>{s.missing_contact_route}</td>
+                <td>{s.median_age_days ?? "–"}</td><td>{s.channels.agency} / {s.channels.direct_buyer}</td>
+                <td>${s.cost_usd.toFixed(4)}</td>
+                <td>{s.cost_per_usable_usd === null ? "n/a (0 usable)" : `$${s.cost_per_usable_usd.toFixed(4)}`}</td>
+                <td>{s.last_error ?? "–"}</td>
               </tr>))}</tbody>
           </table>
         )}

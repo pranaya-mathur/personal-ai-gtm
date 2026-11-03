@@ -8,6 +8,11 @@ from app.connectors.agencies import (
 from app.connectors.apify import ApifyActorConnector
 from app.connectors.apify_specs import SPECS
 from app.connectors.base import DiscoveryConnector
+from app.connectors.intent_sources import (
+    CanadaBuysConnector,
+    FindATenderConnector,
+    SearchIntentConnector,
+)
 from app.connectors.mock import MockAgencyConnector, MockOpportunityConnector
 from app.connectors.public_apis import (
     ContractsFinderConnector,
@@ -29,6 +34,9 @@ _FACTORIES: dict[str, Factory] = {
     "worldbank_api": lambda s: WorldBankApiConnector(s),
     "uk_contracts_finder": lambda s: ContractsFinderConnector(s),
     "hn_freelancer_threads": lambda s: HackerNewsFreelancerConnector(s),
+    "canadabuys": lambda s: CanadaBuysConnector(s),
+    "uk_find_a_tender": lambda s: FindATenderConnector(s),
+    "intent_search": lambda s: SearchIntentConnector(s),
 }
 for _name, _spec in SPECS.items():
     _FACTORIES[_name] = lambda s, _spec=_spec: ApifyActorConnector(_spec, s)  # type: ignore[misc]

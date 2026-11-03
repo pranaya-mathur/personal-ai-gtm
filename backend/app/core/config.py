@@ -26,6 +26,21 @@ class Settings(BaseSettings):
     )
     enabled_discoverers: str = ""  # e.g. "wikidata,github": automatic candidate discovery (network)
     candidates_per_run: int = 15  # candidate domains read per run
+    # Intent-focused search (OPTIONAL, billable: Brave ~$0.005/request). Edit freely; each query
+    # must describe a REQUEST, not a topic. Nothing runs unless SEARCH_DISCOVERY_ENABLED=true.
+    intent_queries_agency: str = (
+        '"looking for" "AI development partner" agency subcontract|'
+        '"seeking" "white-label" AI engineering partner agency|'
+        '"we are looking for" subcontractors "machine learning" OR "LLM" agency partner'
+    )
+    intent_queries_buyer: str = (
+        '"request for proposal" chatbot OR "AI agent" OR "RAG" development|'
+        '"looking for" developer to build "AI agent" OR "RAG" OR "document processing" budget|'
+        '"RFP" "generative AI" "proposals due"'
+    )
+    search_freshness: str = "pm"  # Brave: pd | pw | pm (31 days) | py
+    search_max_pages: int = 15  # pages read per run
+    search_budget_usd: float | None = None  # lifetime cap for the "brave" spend family
     brave_api_key: SecretStr | None = None
     search_discovery_enabled: bool = False  # Brave queries only when explicitly turned on
 
@@ -99,6 +114,14 @@ class Settings(BaseSettings):
 
     worker_poll_interval_seconds: float = 2.0
     worker_max_attempts: int = 3
+
+    @property
+    def intent_queries_agency_list(self) -> list[str]:
+        return [q.strip() for q in self.intent_queries_agency.split("|") if q.strip()]
+
+    @property
+    def intent_queries_buyer_list(self) -> list[str]:
+        return [q.strip() for q in self.intent_queries_buyer.split("|") if q.strip()]
 
     @property
     def discovery_keyword_list(self) -> list[str]:

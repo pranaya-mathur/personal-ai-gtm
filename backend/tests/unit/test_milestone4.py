@@ -267,7 +267,7 @@ def test_candidates_are_verified_by_reading_their_pages_and_unknown_orgs_get_sto
     pages = {
         "https://model.example/partners": (
             200,
-            '<p>Our delivery runs through white-label engineering partners for every client.</p><a href="mailto:partners@model.example">Write</a>',
+            '<p>Our delivery runs through white-label partner teams for every client.</p><a href="mailto:partners@model.example">Write</a>',
         ),
         "https://model.example/contact": (
             200,
@@ -483,3 +483,237 @@ def test_old_post_without_an_open_deadline_is_rejected_as_stale() -> None:
         stale=False,
     )
     assert fresh.triage == "needs_verification"
+
+
+# ------------------------------------------------------------------ Milestone 5: intent sources
+def test_intent_agency_seeking_vs_offering_vs_recruitment() -> None:
+    from app.services.intent import classify_intent
+
+    t = S.topic_term_list
+    seeking = "We are looking for AI delivery partners and subcontractors to join our client projects. Contact partners@x.example."
+    assert classify_intent(seeking, t).kind == "agency_seeking"
+    offering = "We provide white-label AI solutions and development services. Book a free call today with our team."
+    assert classify_intent(offering, t).kind == "agency_offering"
+    hiring = (
+        "We are hiring a full-time machine learning engineer. Salary competitive. Join our team."
+    )
+    assert classify_intent(hiring, t).kind == "recruitment"
+    assert (
+        classify_intent(
+            "AI is transforming every industry according to analysts this year.", t
+        ).kind
+        == "none"
+    )
+
+
+def test_buyer_needs_request_plus_build_plus_ai_in_one_sentence() -> None:
+    from app.services.intent import classify_intent
+
+    t = S.topic_term_list
+    ok = "We are looking for a developer to build an AI agent that triages support tickets, budget $6,000."
+    assert classify_intent(ok, t).kind == "buyer_request"
+    generic = "Generative AI is a big topic. Many companies are looking for ways to cut costs this quarter."
+    assert classify_intent(generic, t).kind == "none"
+    news = "Company announces new chatbot platform for enterprises. The platform can build agents."
+    assert classify_intent(news, t).kind != "buyer_request"
+
+
+def test_marketplaces_job_boards_and_socials_are_excluded() -> None:
+    from app.services.intent import is_excluded_source
+
+    for u in (
+        "https://www.upwork.com/jobs/x",
+        "https://fr.linkedin.com/jobs/1",
+        "https://www.reddit.com/r/forhire",
+        "https://uk.indeed.com/viewjob",
+        "https://clutch.co/agencies",
+        "https://www.toptal.com/ai",
+    ):
+        assert is_excluded_source(u), u
+    assert not is_excluded_source("https://agency.example/partners")
+
+
+def test_page_date_comes_only_from_machine_readable_markup() -> None:
+    from app.services.intent import page_date
+
+    assert (
+        page_date('<meta property="article:published_time" content="2026-10-28T09:00:00Z">').day
+        == 28
+    )  # type: ignore[union-attr]
+    assert (
+        page_date(
+            '<script type="application/ld+json">{"datePublished":"2026-10-01"}</script>'
+        ).month
+        == 10
+    )  # type: ignore[union-attr]
+    assert page_date("<p>Posted a while ago</p>") is None
+
+
+def test_canadabuys_csv_keeps_open_ai_notices_and_flags_closed() -> None:
+    from app.connectors.intent_sources import CanadaBuysConnector
+
+    csv_text = (
+        "title-titre-eng,tenderDescription-descriptionAppelOffres-eng,noticeURL-URLavis-eng,tenderStatus-appelOffresStatut-eng,"
+        "tenderClosingDate-appelOffresDateCloture,publicationDate-datePublication,contactInfoEmail-informationsContactCourriel,"
+        "contractingEntityName-nomEntitContractante-eng\n"
+        'Machine learning pilot for case triage,"The department seeks a supplier to develop and deploy a machine learning model.",https://merx.example/1,Open,2099-01-15,2026-10-20,Proc@Dept.example,Dept of Examples\n'
+        'Old chatbot,"Build a chatbot.",https://merx.example/2,Expired,2025-01-15,2025-01-01,,Dept of Examples\n'
+        'Office chairs,"Supply of chairs.",https://merx.example/3,Open,2099-01-15,2026-10-20,,Dept of Examples\n'
+    )
+    found = CanadaBuysConnector.parse(csv_text, S.topic_term_list)
+    assert [f.title for f in found] == ["Machine learning pilot for case triage", "Old chatbot"]
+    assert found[0].source_status == "open" and found[0].contact_route == "proc@dept.example"
+    assert found[1].source_status == "closed" and found[0].organization_country == "CAN"
+
+
+def test_find_a_tender_builds_notice_urls_from_release_ids() -> None:
+    from app.connectors.intent_sources import FindATenderConnector
+
+    soon = (NOW + timedelta(days=12)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rel = {
+        "id": "103904-2026",
+        "tender": {
+            "title": "Chatbot for residents",
+            "description": "Develop a chatbot.",
+            "classification": {"id": "72000000"},
+            "tenderPeriod": {"endDate": soon},
+            "datePublished": "2026-11-01T00:00:00Z",
+        },
+        "parties": [
+            {
+                "name": "Council",
+                "roles": ["buyer"],
+                "contactPoint": {"email": "Tenders@Council.example"},
+            }
+        ],
+    }
+    found = FindATenderConnector.parse(
+        {"releases": [rel]}, S.topic_term_list, FindATenderConnector._notice_url
+    )
+    assert found[0].source_url == "https://www.find-tender.service.gov.uk/Notice/103904-2026"
+    assert found[0].contact_route == "tenders@council.example" and found[0].source_status == "open"
+
+
+def _intent_settings(**kw):  # type: ignore[no-untyped-def]
+    return Settings(
+        database_url="sqlite://",
+        search_discovery_enabled=True,
+        brave_api_key="k",
+        intent_queries_agency="q-agency",
+        intent_queries_buyer="q-buyer",
+        **kw,
+    )  # type: ignore[arg-type]
+
+
+def test_search_intent_reads_pages_and_keeps_only_dated_stated_requests() -> None:
+    from app.connectors.intent_sources import SearchIntentConnector
+
+    results = {
+        "q-agency": [
+            {"url": "https://alpha.example/news/partners", "title": "Alpha"},
+            {"url": "https://www.upwork.com/jobs/1", "title": "marketplace"},
+            {"url": "https://offer.example/services", "title": "Offer"},
+        ],
+        "q-buyer": [
+            {"url": "https://buyer.example/brief", "title": "Brief"},
+            {"url": "https://undated.example/brief", "title": "Undated"},
+        ],
+    }
+    pages = {
+        "https://alpha.example/news/partners": '<meta property="article:published_time" content="2026-10-28T09:00:00Z"><p>We are looking for AI delivery partners and subcontractors for our client projects. Email partners@alpha.example.</p>',
+        "https://offer.example/services": "<p>We provide white-label AI solutions and development services. Book a free call today.</p>",
+        "https://buyer.example/brief": '<meta property="article:published_time" content="2026-10-30T09:00:00Z"><p>We are looking for a developer to build an AI agent for support triage. Write to hi@buyer.example.</p>',
+        "https://undated.example/brief": "<p>We are looking for a developer to build an AI agent for support triage.</p>",
+    }
+
+    def api(req: httpx.Request) -> httpx.Response:
+        q = req.url.params["q"]
+        assert req.url.params["freshness"] == "pm" and req.headers["x-subscription-token"] == "k"
+        return httpx.Response(200, json={"web": {"results": results[q]}})
+
+    c = SearchIntentConnector(_intent_settings(), httpx.MockTransport(api), _checker_pages(pages))
+    res = c.discover(DiscoveryQuery())
+    by_url = {f.source_url: f for f in res.findings}
+    assert set(by_url) == {
+        "https://alpha.example/news/partners",
+        "https://buyer.example/brief",
+        "https://undated.example/brief",
+    }
+    a, b, u = (
+        by_url["https://alpha.example/news/partners"],
+        by_url["https://buyer.example/brief"],
+        by_url["https://undated.example/brief"],
+    )
+    assert a.kind is SignalKind.PARTNER_ACTIVITY and a.partnership_class == "active_requirement"
+    assert a.contact_route == "partners@alpha.example" and a.published_at is not None
+    assert b.kind is SignalKind.PROJECT_REQUEST and b.contact_route == "hi@buyer.example"
+    assert u.published_at is None  # kept for audit, but undated = never current
+    assert res.actual_cost_usd == pytest.approx(0.01)  # 2 requests x $0.005
+
+
+def _checker_pages(pages):  # type: ignore[no-untyped-def]
+    return _fake_checker({k: (200, v) for k, v in pages.items()})
+
+
+def test_undated_search_hit_is_rejected_as_stale_and_dated_one_needs_verification(session) -> None:  # type: ignore[no-untyped-def]
+    from app.connectors.intent_sources import SearchIntentConnector
+
+    pages = {
+        "https://buyer.example/brief": '<meta property="article:published_time" content="NOWSTAMP"><p>We are looking for a developer to build an AI agent for support triage. Write to hi@buyer.example.</p>'.replace(
+            "NOWSTAMP", NOW.strftime("%Y-%m-%dT%H:%M:%SZ")
+        ),
+        "https://undated.example/brief": "<p>We are looking for a developer to build an AI agent for support triage.</p>",
+    }
+
+    def api(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"web": {"results": [{"url": u, "title": "t"} for u in pages]}}
+        )
+
+    c = SearchIntentConnector(_intent_settings(), httpx.MockTransport(api), _checker_pages(pages))
+    for f in c.discover(DiscoveryQuery(max_results=10)).findings:
+        ingest_finding(session, f, "intent_search", None, 90)
+    got = [
+        str(assess_opportunity(session, o, S).triage)
+        for o in session.execute(select(Opportunity)).scalars()
+    ]
+    assert sorted(got) == ["needs_verification", "rejected"]  # never "actionable": no open status
+
+
+def test_search_intent_is_off_without_explicit_enable_and_key() -> None:
+    from app.connectors.intent_sources import SearchIntentConnector
+
+    with pytest.raises(ConnectorError, match="off"):
+        SearchIntentConnector(S).discover(DiscoveryQuery())
+    est = SearchIntentConnector(_intent_settings()).estimate_cost(DiscoveryQuery())
+    assert est.usd == pytest.approx(0.01)
+
+
+def test_search_budget_cap_blocks_before_any_request(session) -> None:  # type: ignore[no-untyped-def]
+    from app.services.spend import SpendGuard, SpendLimitExceeded
+
+    s = Settings(database_url="sqlite://", search_budget_usd=0.01)
+    g = SpendGuard(session, s)
+    g.reserve(0.01, None, "brave", "brave:intent_search", "discovery")
+    with pytest.raises(SpendLimitExceeded, match="brave"):
+        g.reserve(0.005, None, "brave", "brave:intent_search", "discovery")
+
+
+def test_untitled_findings_from_different_sites_are_not_merged(session) -> None:  # type: ignore[no-untyped-def]
+    def mk(host: str) -> RawFinding:
+        return RawFinding(
+            kind=SignalKind.PROJECT_REQUEST, title="Brief", source_url=f"https://{host}/b",
+            original_text=f"Looking for a developer to build an AI agent ({host}).", published_at=NOW,
+        )  # fmt: skip
+
+    a = ingest_finding(session, mk("one.example"), "intent_search", None, 90)
+    b = ingest_finding(session, mk("two.example"), "intent_search", None, 90)
+    assert a.opportunity_id != b.opportunity_id
+
+
+def test_equipment_supply_titles_are_not_software_projects_even_without_a_category_prefix() -> None:
+    r = _a(
+        "Supply, Delivery, Installation and Commissioning of an Advanced Fluorescence Microscope",
+        "The microscope uses machine learning for image analysis. Supplier must install and commission it.",
+    )
+    assert r.technical_relevance == "not_relevant" and r.triage == "rejected"

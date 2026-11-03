@@ -55,7 +55,11 @@ class SpendGuard:
         """`family` is the provider prefix ("openai" / "apify") for the controlled-test caps."""
         s = self.settings
         if family is not None:
-            cap = {"openai": s.openai_test_budget_usd, "apify": s.apify_test_budget_usd}.get(family)
+            cap = {
+                "openai": s.openai_test_budget_usd,
+                "apify": s.apify_test_budget_usd,
+                "brave": s.search_budget_usd,
+            }.get(family)
             if cap is not None and self._total(family=family) + estimated_usd > cap:
                 raise SpendLimitExceeded(f"{family} test budget (${cap:.2f}) would be exceeded")
         if (

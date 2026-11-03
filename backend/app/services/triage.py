@@ -56,6 +56,12 @@ _NON_SOFTWARE = re.compile(
     r"laboratory|building|real estate|food|energy)\b",
     re.I,
 )
+_HARDWARE_TITLE = re.compile(
+    r"\b(supply|delivery|installation|commissioning|purchase|procurement)\b[^.]{0,60}\b("
+    r"microscop\w*|equipment|apparatus|hardware|instruments?|servers?|machines?|vehicles?|"
+    r"furniture|laborator\w+)\b",
+    re.I,
+)
 _HIRING = re.compile(
     r"\b(recruit\w*|recrutement|hiring|vacanc\w+|job opening|individual consultant|"
     r"full-?time (?:employee|position)|chief [\w &-]{0,30} officer|salary)\b",
@@ -131,7 +137,9 @@ def stage_a(
             "only an ambiguous acronym matched" if distinct else "no AI term in the source text"
         )
         return TechnicalRelevance.NOT_RELEVANT, info
-    if non_software := _NON_SOFTWARE.search(title):
+    if (non_software := _NON_SOFTWARE.search(title)) or (
+        non_software := _HARDWARE_TITLE.search(title)
+    ):
         info["why"] = f"category {non_software.group(0).strip(' -–')!r} is not software/AI services"
         return TechnicalRelevance.NOT_RELEVANT, info
     if _HIRING.search(title) or _HIRING.search(text[:300]):

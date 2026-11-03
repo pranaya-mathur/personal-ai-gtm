@@ -166,7 +166,12 @@ def ingest_finding(
         session.add(evidence)
         session.flush()
 
-    key = opportunity_dedupe_key(category, (org.domain or org.name) if org else None, finding.title)
+    org_key = (
+        (org.domain or org.name)
+        if org
+        else (finding.organization_domain or urlparse(finding.source_url).hostname)
+    )
+    key = opportunity_dedupe_key(category, org_key, finding.title)
     opp = session.execute(
         select(Opportunity).where(Opportunity.dedupe_key == key)
     ).scalar_one_or_none()

@@ -122,9 +122,7 @@ def test_agency_seeking_ai_delivery_partners_is_an_active_requirement() -> None:
 
 
 def test_existing_subcontracting_model_is_verified_not_active() -> None:
-    s = classify_partner_text(
-        "Our projects are delivered with white-label engineering teams.", TERMS
-    )
+    s = classify_partner_text("Our projects are delivered with white-label partner teams.", TERMS)
     assert s is not None and s.partnership_class == "verified_model"
 
 
@@ -181,8 +179,8 @@ def test_feed_connector_parses_items_and_rejects_entity_tricks() -> None:
         '<?xml version="1.0"?><rss><channel>'
         "<item><title>Gamma launches white-label AI programme</title>"
         "<link>https://gamma.example/news/1</link><pubDate>Mon, 26 Oct 2026 10:00:00 GMT</pubDate>"
-        "<description>Gamma now delivers client work through white-label AI engineering "
-        "partners across Europe.</description></item>"
+        "<description>Gamma now delivers client work through white-label partner "
+        "teams across Europe.</description></item>"
         "<item><title>Office party</title><link>https://gamma.example/news/2</link>"
         "<description>Cake was served at the annual office party.</description></item>"
         "</channel></rss>"

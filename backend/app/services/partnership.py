@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Deterministic classification of agency/partner text. Never infers a need.
 
   active_requirement  the text itself says the company is looking for subcontractors / delivery
@@ -29,7 +30,7 @@ _PARTNER_NOUN = re.compile(
     re.I,
 )
 _MODEL = re.compile(
-    r"\b(white[- ]?label\w*|sub-?contract(?:s|ed|ing|ors?)\b|we (?:work|partner|collaborate) with "
+    r"\b(white[- ]?label (?:partners?|teams?)|sub-?contract(?:s|ed|ing|ors?)\b|we (?:work|partner|collaborate) with "
     r"(?:specialist |trusted |independent )?(?:sub-?contractors|freelance \w+|partner agencies|"
     r"delivery partners|specialist partners)|our network of (?:specialist |trusted )?"
     r"(?:partners|developers|engineers|sub-?contractors)|trusted (?:delivery )?partners? deliver|"

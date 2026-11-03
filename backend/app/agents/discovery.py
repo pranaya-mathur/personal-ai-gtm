@@ -57,12 +57,17 @@ class _DiscoveryAgent:
         ):
             with attempt:
                 est = connector.estimate_cost(query).usd
-                family = "apify" if connector.name.startswith("apify") else None
+                family = getattr(connector, "spend_family", None) or (
+                    "apify" if connector.name.startswith("apify") else None
+                )
                 reservation = None
                 if est > 0:
-                    reservation = self.spend.reserve(
-                        est, run_id, family, connector.name, "discovery"
+                    ledger_name = (
+                        f"{family}:{connector.name}"
+                        if getattr(connector, "spend_family", None)
+                        else connector.name
                     )
+                    reservation = self.spend.reserve(est, run_id, family, ledger_name, "discovery")
                 else:
                     self.spend.check(0.0, run_id, family)
                 result = connector.discover(query)

@@ -257,7 +257,12 @@ class ContractsFinderConnector(_Free):
         )
 
     @classmethod
-    def parse(cls, payload: dict[str, Any], terms: list[str]) -> list[RawFinding]:
+    def parse(
+        cls,
+        payload: dict[str, Any],
+        terms: list[str],
+        notice_url: Any = None,
+    ) -> list[RawFinding]:
         from app.services.triage import find_terms
 
         out: list[RawFinding] = []
@@ -274,6 +279,8 @@ class ContractsFinderConnector(_Free):
             ):
                 continue
             doc = next((d.get("url") for d in t.get("documents", []) if d.get("url")), None)
+            if not doc and notice_url is not None:
+                doc = notice_url(rel)
             if not doc or doc in seen:
                 continue
             seen.add(doc)

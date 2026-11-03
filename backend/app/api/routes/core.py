@@ -623,6 +623,18 @@ def source_performance(db: Session = Depends(get_db)) -> dict[str, object]:
     """Per-source yield, built only from stored records: what each source produced and how much
     of it survived triage. 'false_positive' = rejected as not relevant after being retrieved."""
     providers = [p for (p,) in db.execute(select(Evidence.provider).distinct()).all()]
+    run_totals: dict[str, dict[str, Any]] = {}
+    for st in db.execute(select(WorkflowRun.state)).scalars():
+        for cs in (st or {}).get("connector_stats", []):
+            a = run_totals.setdefault(cs["connector"], {"retrieved": 0, "duplicates": 0, "runs": 0})
+            a["retrieved"] += cs.get("retrieved", 0)
+            a["duplicates"] += cs.get("duplicates", 0)
+            a["runs"] += 1
+            if cs.get("status") in ("failed", "blocked"):
+                a["last_error"] = cs.get("status")
+    for name in run_totals:  # sources that only ever returned nothing still appear
+        if name not in providers:
+            providers.append(name)
     sources: list[dict[str, object]] = []
     for prov in sorted(providers):
         ids = [
@@ -649,9 +661,47 @@ def source_performance(db: Session = Depends(get_db)) -> dict[str, object]:
                 ProviderSpend.provider == prov
             )
         ).scalar_one()
+        views = []
+        ages: list[int] = []
+        routed = (
+            {
+                i
+                for (i,) in db.execute(
+                    select(ContactRoute.opportunity_id).where(ContactRoute.opportunity_id.in_(ids))
+                ).all()
+            }
+            if ids
+            else set()
+        )
+        now_ = utcnow()
+        for o in opps:
+            org_ = db.get(Organization, o.organization_id) if o.organization_id else None
+            views.append((o, view_for(o, org_.kind if org_ else None)))
+            ref = (
+                o.first_seen_at
+                if o.first_seen_at.tzinfo
+                else o.first_seen_at.replace(tzinfo=now_.tzinfo)
+            )
+            ages.append((now_ - ref).days)
+        signals = [o for o, v in views if v in ("active_project", "agency_seeking")]
+        usable = [o for o in signals if o.id in routed and o.verification_status != "stale"]
+        cost_total = float(spend)
+        agg = run_totals.get(prov, {})
         sources.append(
             {
                 "source": prov,
+                "retrieved_total": agg.get("retrieved", 0),
+                "duplicates_total": agg.get("duplicates", 0),
+                "runs": agg.get("runs", 0),
+                "last_error": agg.get("last_error"),
+                "demand_signals": len(signals),
+                "usable_opportunities": len(usable),
+                "cost_per_usable_usd": (cost_total / len(usable)) if usable else None,
+                "median_age_days": sorted(ages)[len(ages) // 2] if ages else None,
+                "channels": {
+                    "agency": sum(o.channel == "agency" for o in opps),
+                    "direct_buyer": sum(o.channel == "direct_buyer" for o in opps),
+                },
                 "is_mock": prov.startswith("mock"),
                 "records": len(opps),
                 "actionable": sum(o.triage == Triage.ACTIONABLE for o in opps),
