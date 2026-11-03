@@ -10,6 +10,8 @@ from app.models.entities import (
     LlmUsage,
     OnboardingItem,
     Opportunity,
+    ProviderRun,
+    SourceSchedule,
     OpportunityEvidence,
     Organization,
     OutreachDraft,
@@ -22,6 +24,8 @@ from app.models.entities import (
 )
 
 __all__ = [
+    "ProviderRun",
+    "SourceSchedule",
     "CapabilityProfile",
     "OnboardingItem",
     "Proposal",

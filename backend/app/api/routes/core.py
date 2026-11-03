@@ -38,6 +38,7 @@ from app.models.enums import (
 )
 from app.orchestrator.runner import enqueue_run
 from app.schemas.api import (
+    VerifyIn,
     AnalysisOut,
     BoardRow,
     BudgetLine,
@@ -73,7 +74,7 @@ from app.services.fit import pipeline_stage
 from app.services.intake import IntakeError, intake_lead
 from app.services.project_type import project_type as project_type_of
 from app.services.query_strategy import effectiveness_report
-from app.services.triage import _parse_value
+from app.services.triage import ATTESTABLE, _parse_value, apply_assessment, assess_opportunity
 from app.utils import utcnow
 
 public_router = APIRouter()
@@ -363,18 +364,39 @@ def get_opportunity(opp_id: uuid.UUID, db: Session = Depends(get_db)) -> Opportu
 )
 def verify_opportunity(
     opp_id: uuid.UUID,
+    body: VerifyIn | None = None,
     who: Identity = OPERATOR,
     db: Session = Depends(get_db),
 ) -> Opportunity:
-    """Human verification: the only path to VERIFIED. Stale evidence cannot be verified."""
+    """Human verification: the only path to VERIFIED. Stale evidence cannot be verified.
+    The commercial assessment is recomputed immediately so status, triage and dashboard view stay
+    consistent; verification never overrides a failed criterion."""
     opp = db.get(Opportunity, opp_id)
     if opp is None:
         raise HTTPException(404, "opportunity not found")
     if opp.verification_status == VerificationStatus.STALE:
         raise HTTPException(409, "stale opportunities cannot be verified; refresh the source")
+    attest = list(dict.fromkeys(body.attest)) if body else []
+    unknown = [a for a in attest if a not in ATTESTABLE]
+    if unknown:
+        raise HTTPException(422, f"cannot attest {unknown}; allowed: {sorted(ATTESTABLE)}")
     opp.verification_status = VerificationStatus.VERIFIED
     opp.verified_by = who.name
     opp.verified_at = utcnow()
+    if attest and not (opp.assessment or {}).get("manual_reject"):
+        attested = dict((opp.assessment or {}).get("attested") or {})
+        for key in attest:
+            attested[key] = {"by": who.name, "at": utcnow().isoformat(), "note": body.note if body else None}
+        opp.assessment = {**(opp.assessment or {}), "attested": attested}
+    previous = apply_assessment(opp, assess_opportunity(db, opp, get_settings()))
+    db.add(
+        Qualification(
+            opportunity_id=opp.id,
+            score=0,
+            criteria={"verification": {"by": who.name, "attested": attest}, "previous": previous},
+            rationale=f"human verification by {who.name}; assessment recomputed",
+        )
+    )
     db.commit()
     return opp
 

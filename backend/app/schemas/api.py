@@ -50,6 +50,8 @@ class RunOut(ORM):
     id: uuid.UUID
     kind: str
     status: str
+    outcome: str | None = None
+    trigger: str | None = None
     attempts: int
     error: str | None
     state: dict[str, Any]
@@ -86,6 +88,14 @@ class OpportunityOut(ORM):
     organization_id: uuid.UUID | None
     first_seen_at: datetime
     last_seen_at: datetime
+
+
+class VerifyIn(BaseModel):
+    """Optional attestation: the reviewer read the original source and confirms the named gates.
+    Allowed keys: supplier_eligibility, delivery_model. Attestation never overrides a failure."""
+
+    attest: list[str] = Field(default_factory=list)
+    note: str | None = Field(default=None, max_length=500)
 
 
 class OpportunityDetail(OpportunityOut):

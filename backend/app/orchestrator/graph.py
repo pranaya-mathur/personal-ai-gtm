@@ -20,7 +20,7 @@ from app.agents.research import ResearchEvidenceAgent
 from app.ai.gateway import LLMGateway
 from app.ai.tasks import AITasks
 from app.connectors.agencies import PartnerPageChecker
-from app.connectors.base import ConnectorError, DiscoveryConnector, DiscoveryQuery
+from app.connectors.base import ConnectorDisabled, ConnectorError, DiscoveryConnector, DiscoveryQuery
 from app.connectors.discoverers import build_discoverers
 from app.core.config import Settings
 from app.core.logging import get_logger
@@ -28,6 +28,8 @@ from app.llm import LLMClient, build_llm
 from app.models import Opportunity
 from app.services.candidates import known_count, next_batch, upsert_candidate
 from app.services.ingest import ingest_finding
+from app.services.commercial_class import commercial_class
+from app.services.query_strategy import record_outcome
 from app.services.source_check import SourceChecker
 from app.services.source_verification import verify_sources
 from app.services.spend import SpendGuard
@@ -57,6 +59,8 @@ class WorkflowState(TypedDict, total=False):
     opportunity_ids: list[str]
     errors: list[str]
     connector_stats: list[dict[str, Any]]
+    query_attribution: list[dict[str, Any]]
+    outcome: dict[str, Any]
     source_checks: dict[str, Any]
     ai: dict[str, Any]
     triage: dict[str, int]
@@ -107,6 +111,10 @@ def build_graph(
                 "opportunity_ids": ids,
                 "errors": [*state.get("errors", []), *result["errors"]],
                 "connector_stats": [*state.get("connector_stats", []), *result["connector_stats"]],
+                "query_attribution": [
+                    *state.get("query_attribution", []),
+                    *result.get("query_attribution", []),
+                ],
             }
 
         return run
@@ -118,6 +126,11 @@ def build_graph(
         for d in build_discoverers(settings):
             try:
                 found = d.discover(query, known_count(session, d.name))
+            except ConnectorDisabled as exc:
+                stats.append(
+                    {"source": d.name, "found": 0, "new": 0, "error": None, "skipped": str(exc)[:200]}
+                )
+                continue
             except ConnectorError as exc:
                 stats.append({"source": d.name, "found": 0, "new": 0, "error": str(exc)[:200]})
                 log.warning("discoverer_failed", source=d.name, error=str(exc)[:200])
@@ -176,6 +189,20 @@ def build_graph(
             a = assess_opportunity(session, opp, settings)
             apply_assessment(opp, a)
             summary[str(a.triage)] = summary.get(str(a.triage), 0) + 1
+        # close the loop: credit each executed query with what its records turned out to be
+        for att in state.get("query_attribution", []):
+            opp = session.get(Opportunity, uuid.UUID(att["oid"]))
+            if opp is None:
+                continue
+            record_outcome(
+                session,
+                provider=att["provider"],
+                query_fingerprint=att["fp"],
+                commercial_class=commercial_class(
+                    category=opp.category, triage=opp.triage, channel=opp.channel
+                ),
+                duplicate=bool(att.get("duplicate")),
+            )
         session.flush()
         return {"triage": summary}
 

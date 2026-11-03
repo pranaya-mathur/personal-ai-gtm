@@ -114,22 +114,30 @@ def build_plan(settings: Settings, *, max_per_channel: int | None = None) -> lis
 def prefer_effective(
     session: Session, plan: list[PlannedQuery], *, min_searches: int = 2
 ) -> list[PlannedQuery]:
-    """Deprioritize queries that repeatedly yield zero useful commercial classes."""
+    """Order a plan by measured outcomes (ordering only; nothing is ever deleted).
+
+    1. proven   - queries that produced useful classes, best useful-per-search first
+    2. untested - too little evidence yet (keeps the configured order)
+    3. weak     - repeatedly executed, many URLs read, zero useful classes
+    """
     rows = {r.fingerprint: r for r in session.execute(select(DiscoveryQueryStat)).scalars()}
-    good: list[PlannedQuery] = []
-    cold: list[PlannedQuery] = []
+    proven: list[tuple[float, int, PlannedQuery]] = []
+    untested: list[PlannedQuery] = []
     weak: list[PlannedQuery] = []
-    for p in plan:
+    for i, p in enumerate(plan):
         row = rows.get(p.fingerprint)
         if row is None or row.searches < min_searches:
-            cold.append(p)
+            untested.append(p)
             continue
         useful = row.confirmed_active + row.agency_partner_need + row.needs_verification
-        if useful == 0 and row.urls_retrieved >= 5:
-            weak.append(p)  # keep at end; do not delete — still inspectable
+        if useful > 0:
+            proven.append((-useful / row.searches, i, p))
+        elif row.urls_retrieved >= 5 or row.searches >= 3:
+            weak.append(p)
         else:
-            good.append(p)
-    return good + cold + weak
+            untested.append(p)
+    proven.sort(key=lambda t: (t[0], t[1]))
+    return [p for _, _, p in proven] + untested + weak
 
 
 def record_search(
@@ -154,6 +162,16 @@ def record_search(
             provider=provider,
             channel=planned.channel,
             query_text=planned.text[:512],
+            searches=0,
+            urls_retrieved=0,
+            pages_ok=0,
+            pages_blocked=0,
+            confirmed_active=0,
+            agency_partner_need=0,
+            needs_verification=0,
+            false_positives=0,
+            duplicates=0,
+            cost_usd=0,
         )
         session.add(row)
     row.searches += 1

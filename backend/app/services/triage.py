@@ -140,6 +140,11 @@ class Assessment:
     missing: list[str] = field(default_factory=list)
     reasons: list[str] = field(default_factory=list)
     next_action: str = ""
+    attested: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def pursuability(self) -> str:
+        return pursuability_of(self.triage, self.technical_relevance, self.criteria)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -148,8 +153,43 @@ class Assessment:
             "missing": self.missing,
             "reasons": self.reasons,
             "next_action": self.next_action,
+            "pursuability": self.pursuability,
+            "attested": self.attested,
             "assessed_at": datetime.now(UTC).isoformat(),
         }
+
+
+# Human attestation can establish an UNKNOWN eligibility/delivery criterion from the original
+# source; it can never overturn a FAIL, a closed source or a lack of relevance.
+ATTESTABLE = {
+    "supplier_eligibility": "procurement_complexity",
+    "delivery_model": "remote_or_subcontract",
+}
+# Providers whose records are formal public procurement (supplier eligibility is a real gate).
+_INFORMAL_PROVIDERS = {
+    "hn_freelancer_threads",
+    "hn_hiring_triggers",
+    "intent_search",
+    "apify_intent_search",
+    "manual_intake",
+    "mock_opportunities",
+    "mock_agencies",
+}
+
+
+def pursuability_of(triage: str, relevance: str, criteria: dict[str, dict[str, str]]) -> str:
+    """Five-way commercial separation. Only `pursuable` means every critical commercial gate
+    (real open request, scope, delivery, supplier eligibility, route, size not failed) is met."""
+    if triage == Triage.REJECTED:
+        return "rejected"
+    if triage == Triage.ACTIONABLE:
+        return "pursuable"
+    ext = criteria.get("external_requirement", {}).get("result")
+    if relevance == TechnicalRelevance.RELEVANT and ext == "pass":
+        return "needs_verification"
+    if ext in ("unknown", "fail") and relevance != TechnicalRelevance.NOT_RELEVANT:
+        return "commercially_interesting"  # partner / vehicle / trigger: not a stated request
+    return "technically_relevant"
 
 
 def stage_a(
@@ -281,8 +321,11 @@ def assess(
     stale: bool = False,
     ai: AiSignal | None = None,
     now: datetime | None = None,
+    attested: dict[str, Any] | None = None,
+    formal_procurement: bool = False,
 ) -> Assessment:
     now = now or datetime.now(UTC)
+    attested = attested or {}
     if deadline is not None and deadline.tzinfo is None:
         deadline = deadline.replace(tzinfo=UTC)  # SQLite returns naive datetimes
     route_ok = valid_route(contact_route, source_urls or []) or bool(known_contacts)
@@ -363,12 +406,20 @@ def assess(
     stale_flag = False
     if stale and status == SourceStatus.UNKNOWN and deadline is None:
         status, stale_flag = SourceStatus.CLOSED, True  # undated/old source with no open deadline
+    deadline_passed = deadline is not None and deadline <= now
     if status == SourceStatus.UNKNOWN and deadline is not None:
         status = SourceStatus.OPEN if deadline > now else SourceStatus.CLOSED
+    elif status == SourceStatus.OPEN and deadline_passed:
+        status = SourceStatus.CLOSED  # an "open" flag cannot outlive a recorded deadline
     if status == SourceStatus.OPEN:
         put("active", "pass", f"open; deadline {deadline:%Y-%m-%d}" if deadline else "open")
     elif status in (SourceStatus.CLOSED, SourceStatus.AWARDED):
-        put("active", "fail", f"source is {status}")
+        put(
+            "active",
+            "fail",
+            f"deadline {deadline:%Y-%m-%d} has passed" if deadline_passed and deadline
+            else f"source is {status}",
+        )
     else:
         put("active", "unknown", "no deadline or open/closed status in the source")
     put(
@@ -419,8 +470,14 @@ def assess(
             "unknown",
             "national-scale AI research programme or prior-information/partnering notice",
         )
+    elif formal_procurement:
+        put(
+            "procurement_complexity",
+            "unknown",
+            "supplier eligibility (registration, turnover, lots, who may bid) not established",
+        )
     else:
-        put("procurement_complexity", "pass", "no complexity barrier stated in the source")
+        put("procurement_complexity", "pass", "informal request: no formal supplier gate")
     put(
         "contact_route",
         "pass" if route_ok else "unknown",
@@ -438,11 +495,21 @@ def assess(
             "unknown",
             "agency-stated need must be confirmed as current by a human",
         )
-    put("budget", "pass", budget_text if budget_text else "UNKNOWN (not stated in source)")
+    put(
+        "budget",
+        "pass" if budget_text else "unknown",
+        budget_text if budget_text else "UNKNOWN (not stated; never evidence of suitability)",
+    )
+    for key, criterion in ATTESTABLE.items():
+        if key in attested and crit.get(criterion, {}).get("result") == "unknown":
+            who = attested[key].get("by", "operator")
+            put(criterion, "pass", f"attested by {who} from the original source")
 
-    missing = [f"{k}: {v['detail']}" for k, v in crit.items() if v["result"] == "unknown"]
+    missing = [
+        f"{k}: {v['detail']}" for k, v in crit.items() if v["result"] == "unknown" and k != "budget"
+    ]
     if not budget_text:
-        missing.append("budget: not stated")
+        missing.append("budget: not stated (ask before quoting)")
     reasons: list[str] = []
     codes: list[str] = []
     if status in (SourceStatus.CLOSED, SourceStatus.AWARDED):
@@ -451,6 +518,7 @@ def assess(
             "source is older than the freshness window and states no open deadline"
             if stale_flag
             else f"opportunity is {status}"
+            + (" (recorded deadline has passed)" if deadline_passed else "")
         )
     if relevance is TechnicalRelevance.NOT_RELEVANT:
         codes.append("hiring_post" if a_info.get("hiring") else "not_relevant")
@@ -483,18 +551,32 @@ def assess(
             "prior-information",
         )
     )
+    # Pursuable = the critical commercial gates are ESTABLISHED, not merely "not contradicted".
+    # Unknown budget does not block (it is not a failure) but is never counted as suitability.
     core_ok = all(
         crit[k]["result"] == "pass"
-        for k in ("external_requirement", "active", "scope", "contact_route")
+        for k in (
+            "external_requirement",
+            "active",
+            "scope",
+            "contact_route",
+            "remote_or_subcontract",
+            "procurement_complexity",
+        )
     )
     if core_ok and not hard_fail and not vehicle_blocks_actionable:
-        reasons.append("relevant, open, external requirement with a buyer contact route")
+        reasons.append(
+            "relevant, open, external requirement with delivery model, supplier eligibility "
+            "and a buyer contact route established"
+        )
         nxt = (
             "Open the notice, check eligibility and size, then decide whether to apply"
             if missing
             else "Review and decide whether to apply"
         )
-        return Assessment(relevance, Triage.ACTIONABLE, None, a_info, crit, missing, reasons, nxt)
+        return Assessment(
+            relevance, Triage.ACTIONABLE, None, a_info, crit, missing, reasons, nxt, attested
+        )
     if hard_fail:
         reasons.append("failed: " + ", ".join(hard_fail))
     if vehicle_blocks_actionable:
@@ -503,11 +585,12 @@ def assess(
             "(supplier list, DPS/framework, selective SA, or defence context)"
         )
     reasons.append(
-        "unconfirmed: " + ", ".join(k for k, v in crit.items() if v["result"] == "unknown")
+        "unconfirmed: "
+        + ", ".join(k for k, v in crit.items() if v["result"] == "unknown" and k != "budget")
     )
     nxt = "Verify manually: " + "; ".join(missing[:3]) if missing else "Verify the source manually"
     return Assessment(
-        relevance, Triage.NEEDS_VERIFICATION, None, a_info, crit, missing, reasons, nxt
+        relevance, Triage.NEEDS_VERIFICATION, None, a_info, crit, missing, reasons, nxt, attested
     )
 
 
@@ -543,6 +626,8 @@ def assess_opportunity(
         org_name=org.name if org else None,
         stale=opp.verification_status == VerificationStatus.STALE,
         ai=ai,
+        attested=dict((opp.assessment or {}).get("attested") or {}),
+        formal_procurement=bool(providers) and not set(providers) <= _INFORMAL_PROVIDERS,
     )
     # Manual intake stays capped until a human verifies the original source.
     manual_only = bool(providers) and all(p == "manual_intake" for p in providers)

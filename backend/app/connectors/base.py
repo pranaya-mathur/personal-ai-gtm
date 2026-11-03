@@ -68,6 +68,7 @@ class RawFinding(BaseModel):
     channel_hint: str | None = None  # e.g. "proactive_buyer" (a trigger, never a request)
     evergreen: bool = False  # live page with no publication date: treated as current, stays undated
     partnership_class: Literal["active_requirement", "verified_model", "potential"] | None = None
+    query_fingerprint: str | None = None  # which configured search query surfaced this record
 
 
 class CostEstimate(BaseModel):
@@ -96,6 +97,11 @@ class DiscoveryConnector(Protocol):
 
 class ConnectorError(Exception):
     """Raised by connectors for provider failures (retried by the runner)."""
+
+
+class ConnectorDisabled(ConnectorError):
+    """The source is switched off or not configured (flag/key/approval missing). Not a failure:
+    nothing was attempted, so it is reported as `skipped`, never as a failed source."""
 
 
 class ConnectorRejected(ConnectorError):

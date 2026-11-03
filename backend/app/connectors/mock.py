@@ -32,7 +32,7 @@ class MockOpportunityConnector:
                 kind=SignalKind.PROJECT_REQUEST,
                 title="RAG assistant for internal support knowledge base",
                 source_url="https://mock-buyer-one.example/posts/rag-assistant",
-                original_text=_TAG + "We are looking for a team to build a retrieval-augmented "
+                original_text=_TAG + "Remote delivery is fine. We are looking for a team to build a retrieval-augmented "
                 "assistant over our support documentation.",
                 published_at=_days_ago(5),
                 organization_name="Mock Buyer One",

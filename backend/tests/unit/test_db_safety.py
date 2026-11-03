@@ -25,3 +25,17 @@ def test_live_looking_databases_are_refused(url: str) -> None:
 )
 def test_clearly_named_test_databases_are_allowed(url: str) -> None:
     assert_safe_test_db(url)
+
+
+def test_name_containing_test_is_not_proof_without_the_sandbox_marker() -> None:
+    # passes the name check, but the server probe must refuse an unreachable/unmarked database
+    url = "postgresql+psycopg://gtm:gtm@localhost:1/my_test_data_live"
+    assert_safe_test_db(url)
+    with pytest.raises(BaseException):  # noqa: B017 - connection error or pytest.fail
+        assert_safe_test_db(url, probe=True)
+
+
+def test_the_configured_application_database_is_refused_even_if_named_test(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://gtm:gtm@localhost:5433/gtm_test")
+    with pytest.raises(pytest.fail.Exception, match="application database"):
+        assert_safe_test_db("postgresql+psycopg://gtm:gtm@127.0.0.1:5433/gtm_test")

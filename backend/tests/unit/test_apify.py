@@ -209,7 +209,7 @@ def test_spend_limit_blocks_apify_before_any_request(session, approved) -> None:
     strict = approved.model_copy(update={"spend_limit_per_run_usd": 0.01})
     conn, fake = make("apify_ted_tenders", load("ted_tenders_items.json"), strict)
     run = _run(session, strict, [conn])
-    assert run.status == "succeeded"
+    assert run.status == "failed" and run.outcome == "failed"  # the only source was blocked
     assert fake.requests == []  # blocked pre-flight
     assert any("blocked" in e for e in run.state["errors"])
     assert session.execute(select(func.count()).select_from(Opportunity)).scalar_one() == 0

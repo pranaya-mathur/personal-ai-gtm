@@ -16,6 +16,7 @@ import httpx
 
 from app.connectors.apify_specs import parse_date
 from app.connectors.base import (
+    ConnectorDisabled,
     ConnectorError,
     CostEstimate,
     DiscoveryQuery,
@@ -29,6 +30,7 @@ from app.core.config import Settings
 from app.core.logging import get_logger
 from app.models.enums import SourceCheckStatus
 from app.services.intent import classify_intent, is_editorial, is_excluded_source, page_date
+from app.services.provider_runs import charge_of
 from app.services.partnership import page_title, visible_text
 from app.services.routes import routes_from_html
 from app.services.source_check import USER_AGENT, SourceChecker
@@ -164,13 +166,26 @@ class SearchIntentConnector:
         checker: SourceChecker | None = None,
     ) -> None:
         self.settings, self._transport, self._checker = settings, transport, checker
+        self._plan_override: list[Any] | None = None
+        self.query_log: dict[str, dict[str, Any]] = {}
+
+    def planned(self) -> list[Any]:
+        """The query plan; the discovery agent may reorder it by measured effectiveness."""
+        from app.services.query_strategy import build_plan
+
+        return self._plan_override if self._plan_override is not None else build_plan(self.settings)
+
+    def set_plan(self, plan: list[Any]) -> None:
+        self._plan_override = plan
+
+    def _log(self, fp: str, channel: str, text: str) -> dict[str, Any]:
+        return self.query_log.setdefault(
+            fp, {"channel": channel, "text": text, "urls": 0, "pages_ok": 0, "pages_blocked": 0}
+        )
 
     def queries(self) -> list[tuple[str, str]]:
         """Configured templates plus facet expansions; duplicates removed. Paid spend still gated."""
-        from app.services.query_strategy import build_plan
-
-        plan = build_plan(self.settings)
-        return [(p.channel, p.text) for p in plan]
+        return [(p.channel, p.text) for p in self.planned()]
 
     def estimate_cost(self, query: DiscoveryQuery) -> CostEstimate:
         n = len(self.queries())
@@ -179,7 +194,7 @@ class SearchIntentConnector:
     def discover(self, query: DiscoveryQuery) -> DiscoveryResult:
         key = self.settings.brave_api_key
         if not self.settings.search_discovery_enabled or key is None:
-            raise ConnectorError("intent search is off (SEARCH_DISCOVERY_ENABLED / BRAVE_API_KEY)")
+            raise ConnectorDisabled("intent search is off (SEARCH_DISCOVERY_ENABLED / BRAVE_API_KEY)")
         checker = self._checker or SourceChecker()
         findings: list[RawFinding] = []
         seen: set[tuple[str, str]] = set()
@@ -194,7 +209,9 @@ class SearchIntentConnector:
             timeout=httpx.Timeout(30.0),
             transport=self._transport,
         ) as c:
-            for channel, q in self.queries():
+            for planned in self.planned():
+                channel, q = planned.channel, planned.text
+                qlog = self._log(planned.fingerprint, channel, q)
                 params: dict[str, Any] = {
                     "q": q,
                     "count": 20,
@@ -211,14 +228,16 @@ class SearchIntentConnector:
                     if not url or (channel, url) in seen or is_excluded_source(url):
                         continue
                     seen.add((channel, url))
+                    qlog["urls"] += 1
                     if url not in fetched:
                         if pages >= self.settings.search_max_pages:
                             continue
                         pages += 1
                         fetched[url] = checker.fetch_page(url)
+                        qlog["pages_ok" if fetched[url][0] is SourceCheckStatus.CONFIRMED else "pages_blocked"] += 1
                     f = self._read(fetched[url], url, channel, r.get("title"))
                     if f is not None:
-                        findings.append(f)
+                        findings.append(f.model_copy(update={"query_fingerprint": planned.fingerprint}))
         return DiscoveryResult(
             provider=self.name,
             findings=findings[: query.max_results],
@@ -290,10 +309,8 @@ class ApifySearchIntentConnector(SearchIntentConnector):
 
     def _plan(self) -> list[tuple[str, str, list[str]]]:
         """(engine, channel, queries) runs. Uses the shared query strategy; Bing stays capped."""
-        from app.services.query_strategy import build_plan
-
         by_channel: dict[str, list[str]] = {"agency": [], "buyer": []}
-        for p in build_plan(self.settings):
+        for p in self.planned():
             by_channel.setdefault(p.channel, []).append(p.text)
         s = self.settings
         plan: list[tuple[str, str, list[str]]] = []
@@ -335,7 +352,7 @@ class ApifySearchIntentConnector(SearchIntentConnector):
 
     def discover(self, query: DiscoveryQuery) -> DiscoveryResult:
         if not self.settings.apify_paid_execution_approved:
-            raise ConnectorError(
+            raise ConnectorDisabled(
                 "Paid Apify execution is not approved (APIFY_PAID_EXECUTION_APPROVED)"
             )
         client = self._get_client()
@@ -352,25 +369,34 @@ class ApifySearchIntentConnector(SearchIntentConnector):
                 actor,
                 self._input(engine, queries, query),
                 cap,
-                getattr(self, "on_run_submitted", None),
+                getattr(self, "ledger", None),
             )
-            used = run.get("usageTotalUsd")
+            known = charge_of(run)["charged"]  # provider-reported real charge, when it has one
             expected = self._run_cost(engine, len(queries))  # published per-page/result price
-            cost += max(float(used) if isinstance(used, int | float) else 0.0, expected)
+            # the reservation is settled at the conservative figure; provider_runs keeps the
+            # provider's real number so reconciliation can later release any over-reservation
+            cost += max(known if known is not None else 0.0, expected)
             for item in client.dataset_items(run["defaultDatasetId"], 50):
+                from app.services.query_strategy import fingerprint as _fp
+
+                term = (item.get("searchQuery") or {}).get("term")
+                fp = _fp(term) if term else None
+                qlog = self._log(fp, channel, term) if fp else {"urls": 0, "pages_ok": 0, "pages_blocked": 0}
                 for r in item.get("organicResults") or []:
                     url = r.get("url") or ""
                     if not url or (channel, url) in seen or is_excluded_source(url):
                         continue
                     seen.add((channel, url))
+                    qlog["urls"] += 1
                     if url not in fetched:
                         if pages >= self.settings.search_max_pages:
                             continue
                         pages += 1
                         fetched[url] = checker.fetch_page(url)
+                        qlog["pages_ok" if fetched[url][0] is SourceCheckStatus.CONFIRMED else "pages_blocked"] += 1
                     f = self._read(fetched[url], url, channel, r.get("title"))
                     if f is not None:
-                        findings.append(f)
+                        findings.append(f.model_copy(update={"query_fingerprint": fp}))
         return DiscoveryResult(
             provider=self.name,
             findings=findings[: query.max_results],

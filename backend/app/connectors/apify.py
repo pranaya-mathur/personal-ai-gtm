@@ -1,6 +1,7 @@
 from app.connectors.apify_client import ApifyClient
 from app.connectors.apify_specs import ActorSpec
 from app.connectors.base import (
+    ConnectorDisabled,
     ConnectorError,
     CostEstimate,
     DiscoveryQuery,
@@ -48,7 +49,7 @@ class ApifyActorConnector:
 
     def discover(self, query: DiscoveryQuery) -> DiscoveryResult:
         if not self.settings.apify_paid_execution_approved:
-            raise ConnectorError(
+            raise ConnectorDisabled(
                 "Paid Apify execution is not approved (APIFY_PAID_EXECUTION_APPROVED=false)"
             )
         cap = self._results_cap(query)
@@ -58,7 +59,7 @@ class ApifyActorConnector:
             self.spec.actor_id,
             self.spec.build_input(query, cap),
             max_charge,
-            getattr(self, "on_run_submitted", None),
+            getattr(self, "ledger", None),
         )
         items = client.dataset_items(run["defaultDatasetId"], cap)
         findings: list[RawFinding] = []

@@ -55,6 +55,15 @@ class WorkflowRun(Base, IdMixin, TimestampMixin):
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Lease: a worker owns the run only while lease_expires_at is in the future; it renews the
+    # lease by heartbeat. A crashed worker's lease simply lapses.
+    lease_owner: Mapped[str | None] = mapped_column(String(96))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Truthful result of a finished run (see orchestrator/outcome.py); status alone is not enough.
+    outcome: Mapped[str | None] = mapped_column(String(32))
+    trigger: Mapped[str] = mapped_column(
+        String(16), default="manual", server_default="manual", nullable=False
+    )  # manual | scheduled
 
 
 class Evidence(Base, IdMixin):
@@ -484,3 +493,55 @@ class OnboardingItem(Base, IdMixin, TimestampMixin):
     done: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     done_by: Mapped[str | None] = mapped_column(String(128))
     done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ProviderRun(Base, IdMixin, TimestampMixin):
+    """One row per billable provider run (an Apify Actor run). Written BEFORE submission, so a
+    crash or timeout can never lose or repeat a run. `idempotency_key` forbids a second submit."""
+
+    __tablename__ = "provider_runs"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_provider_runs_idempotency_key"),
+        Index("ix_provider_runs_spend", "spend_id"),
+        Index("ix_provider_runs_external", "external_id"),
+    )
+
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)  # connector name
+    actor: Mapped[str] = mapped_column(String(128), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(96), nullable=False)
+    workflow_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("workflow_runs.id"))
+    spend_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("provider_spend.id"))
+    external_id: Mapped[str | None] = mapped_column(String(64))  # provider run id once known
+    dataset_id: Mapped[str | None] = mapped_column(String(64))
+    # submitting -> submitted -> succeeded | failed | rejected ; unknown = outcome uncertain
+    status: Mapped[str] = mapped_column(String(16), default="submitting", nullable=False)
+    max_charge_usd: Mapped[float] = mapped_column(Numeric(12, 4), default=0, nullable=False)
+    reported_usd: Mapped[float | None] = mapped_column(Numeric(12, 4))  # usageTotalUsd as reported
+    event_usd: Mapped[float | None] = mapped_column(Numeric(12, 4))  # chargedEventCounts x price
+    charged_usd: Mapped[float | None] = mapped_column(Numeric(12, 4))  # best known real charge
+    cost_basis: Mapped[str] = mapped_column(String(24), default="estimate", nullable=False)
+    detail: Mapped[dict] = mapped_column(JsonType, default=dict, nullable=False)  # type: ignore[type-arg]
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SourceSchedule(Base, IdMixin, TimestampMixin):
+    """Per-source scheduled discovery + health. Paid sources are never scheduled automatically."""
+
+    __tablename__ = "source_schedules"
+    __table_args__ = (UniqueConstraint("connector", name="uq_source_schedules_connector"),)
+
+    connector: Mapped[str] = mapped_column(String(64), nullable=False)
+    channel: Mapped[str] = mapped_column(String(24), nullable=False)  # A | B | C | mixed
+    interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    paid: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    min_gap_minutes: Mapped[int] = mapped_column(Integer, default=30, nullable=False)  # rate limit
+    max_retries: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_status: Mapped[str | None] = mapped_column(String(24))
+    last_error: Mapped[str | None] = mapped_column(String(300))
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_retrieved: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_new: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

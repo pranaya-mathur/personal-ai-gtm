@@ -37,13 +37,14 @@ def make_request(session, **kw):  # type: ignore[no-untyped-def]
     f = RawFinding(
         kind=SignalKind.PROJECT_REQUEST, title="RAG assistant for support knowledge base",
         source_url="https://buyer.example/rfp/1",
-        original_text="We are looking for a team to design and deploy a retrieval-augmented assistant over our support documents. Budget 8000 USD.",
+        original_text="We are looking for a team to design and deploy a retrieval-augmented assistant over our support documents, remote delivery. Budget 8000 USD.",
         published_at=NOW, organization_name="Buyer One", organization_country="DE",
         source_status="open", deadline=NOW + timedelta(days=14), budget_text="8000 USD",
         contact_route="procurement@buyer.example",
     )  # fmt: skip
     f = f.model_copy(update=kw)
     opp = session.get(Opportunity, ingest_finding(session, f, "ted_api", None, 90).opportunity_id)
+    opp.assessment = {"attested": {"supplier_eligibility": {"by": "test"}}}
     apply_assessment(opp, assess_opportunity(session, opp, S))
     return opp
 

@@ -57,11 +57,11 @@ def test_generic_it_tender_that_only_lists_ai_is_not_actionable() -> None:
 def test_genuine_ai_request_is_actionable_and_budget_is_explicitly_unknown() -> None:
     r = a(
         title="Generative AI assistant for citizen services",
-        text="The authority seeks a contractor to design and deploy a RAG assistant.",
+        text="The authority seeks a contractor to design and deploy a RAG assistant, remote delivery.",
     )
     assert r.technical_relevance == "relevant" and r.triage == "actionable"
     assert r.criteria["budget"]["detail"].startswith("UNKNOWN")
-    assert "budget: not stated" in r.missing  # missing stays visible, never invented
+    assert any(m.startswith("budget: not stated") for m in r.missing)  # missing stays visible, never invented
 
 
 @pytest.mark.parametrize("status", ["closed", "awarded"])
@@ -389,10 +389,10 @@ def test_audit_preserves_evidence_and_history_and_never_promotes_category(sessio
             kind=SignalKind.PROJECT_REQUEST, title=title, source_url=f"https://x.example/{title[:8]}",
             original_text=text, published_at=NOW, organization_name=f"Org {title[:6]}", **kw,
         )  # fmt: skip
-        return ingest_finding(session, f, "apify_ted_tenders", None, 90).opportunity_id
+        return ingest_finding(session, f, "hn_freelancer_threads", None, 90).opportunity_id
 
     off = add("Romania Software services", "Development of accounting software modules.")
-    ok = add("Generative AI assistant", "Design and deploy an AI assistant.", source_status="open",
+    ok = add("Generative AI assistant", "Design and deploy an AI assistant, remote.", source_status="open",
              deadline=NOW + timedelta(days=9), contact_route="a@b.example")  # fmt: skip
     session.get(Opportunity, off).status = "qualified"  # type: ignore[union-attr]  # old keyword gate
     session.add(Qualification(opportunity_id=off, score=82.5, criteria={}, rationale="old"))

@@ -13,6 +13,7 @@ import httpx
 
 from app.connectors.apify_specs import parse_date
 from app.connectors.base import (
+    ConnectorDisabled,
     ConnectorError,
     CostEstimate,
     DiscoveryQuery,
@@ -43,7 +44,7 @@ class SamGovConnector:
     def discover(self, query: DiscoveryQuery) -> DiscoveryResult:
         key = self.settings.samgov_api_key
         if key is None or not key.get_secret_value():
-            raise ConnectorError("SAM.gov is off (SAMGOV_API_KEY not set)")
+            raise ConnectorDisabled("SAM.gov is off (SAMGOV_API_KEY not set)")
         now = datetime.now(UTC)
         posted_from = (now - timedelta(days=min(query.max_age_days, 90))).strftime("%m/%d/%Y")
         posted_to = now.strftime("%m/%d/%Y")

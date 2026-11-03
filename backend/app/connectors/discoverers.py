@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from app.connectors.base import ConnectorError, DiscoveryQuery
+from app.connectors.base import ConnectorDisabled, ConnectorError, DiscoveryQuery
 from app.core.config import Settings
 from app.services.candidates import Candidate, normalize_domain
 from app.services.source_check import USER_AGENT
@@ -160,7 +160,7 @@ class BraveSearchDiscoverer:
     def discover(self, query: DiscoveryQuery, already_known: int) -> list[Candidate]:
         key = self.settings.brave_api_key
         if not self.settings.search_discovery_enabled or key is None:
-            raise ConnectorError(
+            raise ConnectorDisabled(
                 "search discovery is off (SEARCH_DISCOVERY_ENABLED / BRAVE_API_KEY)"
             )
         out: list[Candidate] = []

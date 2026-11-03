@@ -121,6 +121,8 @@ class Settings(BaseSettings):
 
     worker_poll_interval_seconds: float = 2.0
     worker_max_attempts: int = 3
+    run_lease_seconds: int = 120  # a worker owns a run only while its lease is renewed
+    run_heartbeat_seconds: float = 30.0
 
     @property
     def intent_queries_agency_list(self) -> list[str]:

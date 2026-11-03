@@ -317,14 +317,15 @@ def test_candidates_are_verified_by_reading_their_pages_and_unknown_orgs_get_sto
     assert session.execute(select(func.count()).select_from(Opportunity)).scalar_one() == 1
 
 
-def test_discoverer_failure_is_recorded_and_does_not_fail_the_run(session) -> None:  # type: ignore[no-untyped-def]
+def test_a_run_where_no_source_executed_is_not_reported_as_success(session) -> None:  # type: ignore[no-untyped-def]
     s = Settings(database_url="sqlite://", enabled_discoverers="search")  # key missing -> error
     enqueue_run(session, "full_discovery", {"query": {}})
     run = claim_next_run(session)
     assert run is not None
     run = execute_run(session, run.id, [], s)
-    assert run.status == "succeeded"
-    assert run.state["source_discovery"][0]["error"].startswith("search discovery is off")
+    assert run.status == "failed" and run.outcome == "failed"
+    assert "no discovery source executed" in (run.error or "")
+    assert run.state["source_discovery"][0]["skipped"].startswith("search discovery is off")
 
 
 # ------------------------------------------------------------------ classification of direct buyers
@@ -334,13 +335,21 @@ def test_direct_buyer_with_ai_request_and_contact_is_actionable_but_expired_is_r
     def f(title: str, status: str, deadline: datetime | None):  # type: ignore[no-untyped-def]
         return RawFinding(
             kind=SignalKind.PROJECT_REQUEST, title=title, source_url="https://b.example/" + title[:5],
-            original_text="Seeking a supplier to design and deploy a generative AI assistant.",
+            original_text="Seeking a supplier to design and deploy a generative AI assistant, remote work ok.",
             published_at=NOW, organization_name="Buyer " + title[:5], source_status=status,  # type: ignore[arg-type]
             deadline=deadline, contact_route="proc@buyer.example",
         )  # fmt: skip
 
     ok = ingest_finding(
-        session, f("Open AI assistant", "open", NOW + timedelta(days=9)), "ted_api", None, 90
+        session, f("Open AI assistant", "open", NOW + timedelta(days=9)), "hn_freelancer_threads", None, 90
+    )
+    formal = ingest_finding(
+        session, f("Formal AI assistant", "open", NOW + timedelta(days=9)), "ted_api", None, 90
+    )
+    # formal procurement: supplier eligibility is not established until a human attests it
+    assert (
+        assess_opportunity(session, session.get(Opportunity, formal.opportunity_id), S).triage  # type: ignore[arg-type]
+        == "needs_verification"
     )
     old = ingest_finding(
         session, f("Expired AI assistant", "closed", NOW - timedelta(days=3)), "ted_api", None, 90
@@ -437,7 +446,7 @@ def test_survey_about_ai_is_not_actionable() -> None:
 def test_genuine_software_ai_tender_still_passes_after_tightening() -> None:
     r = _a(
         "France – Software programming and consultancy services – Implementation of a chatbot for the website",
-        "The contractor will design and deploy a customer chatbot.",
+        "The contractor will design and deploy a customer chatbot, remotely.",
     )
     assert r.technical_relevance == "relevant" and r.triage == "actionable"
 
