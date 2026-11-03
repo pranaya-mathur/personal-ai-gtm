@@ -88,6 +88,18 @@ def execute_run(
         state["run_id"] = str(run.id)
         last: dict[str, Any] = dict(state)
         for snapshot in graph.stream(state, stream_mode="values"):
+            session.refresh(run, ["status"])
+            if run.status == RunStatus.CANCELLED:
+                run.finished_at = utcnow()
+                session.commit()
+                log.info("run_cancelled", run_id=str(run.id))
+                return run
+            started = run.started_at
+            if (
+                started is not None
+                and (utcnow() - started).total_seconds() > settings.run_timeout_seconds
+            ):
+                raise TimeoutError(f"run exceeded {settings.run_timeout_seconds}s")
             last = snapshot
             run.state = _jsonable(snapshot)  # persist after every node
             run.locked_at = utcnow()
@@ -103,7 +115,9 @@ def execute_run(
         run = session.get(WorkflowRun, run_id)
         assert run is not None
         run.error = f"{type(exc).__name__}: {exc}"
-        terminal = run.attempts >= settings.worker_max_attempts
+        if run.status == RunStatus.CANCELLED:
+            return run
+        terminal = run.attempts >= settings.worker_max_attempts or isinstance(exc, TimeoutError)
         run.status = RunStatus.FAILED if terminal else RunStatus.QUEUED
         run.finished_at = utcnow() if terminal else None
         session.commit()

@@ -1,5 +1,6 @@
 import uuid
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -42,6 +43,7 @@ class IngestOutcome:
     created: bool
     stale: bool
     new_evidence: bool
+    duplicate: bool = False
 
 
 def _upsert_org(
@@ -65,6 +67,19 @@ def _upsert_org(
         session.add(org)
         session.flush()
     return org
+
+
+def validate_finding(finding: RawFinding) -> str | None:
+    """Reject records that cannot be traced to a real, citable source. Returns the reason, or
+    None if acceptable. A provider error or empty record must never become an opportunity."""
+    if not finding.title.strip():
+        return "missing title"
+    if not finding.original_text.strip():
+        return "missing source text"
+    parsed = urlparse(finding.source_url.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return "missing or invalid source URL"
+    return None
 
 
 def ingest_finding(
@@ -164,4 +179,4 @@ def ingest_finding(
                 )
     session.flush()
     log.info("finding_ingested", provider=provider, created=created, stale=not fresh)
-    return IngestOutcome(opp.id, created, not fresh, new_evidence)
+    return IngestOutcome(opp.id, created, not fresh, new_evidence, duplicate=not created)

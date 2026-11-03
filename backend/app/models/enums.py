@@ -36,6 +36,7 @@ class RunStatus(enum.StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class OutreachStatus(enum.StrEnum):

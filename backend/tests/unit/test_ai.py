@@ -135,7 +135,7 @@ class RoutingLLM:
     def ensure_ready(self) -> None:
         return None
 
-    def complete_structured(self, system, user, schema, max_output_tokens):  # type: ignore[no-untyped-def]
+    def complete_structured(self, system, user, schema, max_output_tokens, model=None):  # type: ignore[no-untyped-def]
         self.calls.append((schema, user))
         if schema in self.handlers:
             out = self.handlers[schema](len(self.calls), user)

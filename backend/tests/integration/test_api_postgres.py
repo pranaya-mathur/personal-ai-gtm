@@ -148,3 +148,34 @@ def test_ai_pipeline_on_postgres_mock_mode(client, pg_url) -> None:  # type: ign
     ev_ids = {e["id"] for e in client.get(f"/opportunities/{fresh['id']}").json()["evidence"]}
     first = next(a for a in analyses if a["task"] == "opportunity_analysis")["output"]
     assert first["claims"][0]["evidence_id"] in ev_ids  # claims cite stored evidence
+
+
+def test_board_flags_mock_records_and_costs_endpoint(client, pg_url) -> None:  # type: ignore[no-untyped-def]
+    client.post("/runs", json={})
+    _process_queue(pg_url)
+    rows = client.get("/board").json()
+    assert len(rows) == 5 and all(r["is_mock"] for r in rows)  # fixtures are never real leads
+    assert all(
+        r["stated_budget"] in (None, "") or isinstance(r["stated_budget"], str) for r in rows
+    )
+    assert all(r["next_action"] for r in rows)
+    ev = client.get(f"/opportunities/{rows[0]['id']}").json()["evidence"]
+    assert all(e["is_mock"] for e in ev)
+    run = client.get("/runs").json()[0]
+    assert run["state"]["connector_stats"] and all(
+        s["is_mock"] for s in run["state"]["connector_stats"]
+    )
+
+    costs = client.get("/costs").json()
+    assert costs["total_spent_usd"] == 0 and {line["family"] for line in costs["lines"]} == {
+        "openai",
+        "apify",
+    }
+
+
+def test_cancel_run_endpoint(client) -> None:  # type: ignore[no-untyped-def]
+    run = client.post("/runs", json={}).json()
+    out = client.post(f"/runs/{run['id']}/cancel")
+    assert out.status_code == 200 and out.json()["status"] == "cancelled"
+    assert client.post(f"/runs/{run['id']}/cancel").status_code == 409  # already terminal
+    assert client.post(f"/runs/{'0' * 8}-0000-0000-0000-{'0' * 12}/cancel").status_code == 404

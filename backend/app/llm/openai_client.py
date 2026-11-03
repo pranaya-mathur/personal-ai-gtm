@@ -59,12 +59,20 @@ class OpenAILLM:
         return self._client
 
     def complete_structured(
-        self, system: str, user: str, schema: type[T], max_output_tokens: int
+        self,
+        system: str,
+        user: str,
+        schema: type[T],
+        max_output_tokens: int,
+        model: str | None = None,
     ) -> StructuredResult:
         self.ensure_ready()
+        model = model or self.model
+        if not model:
+            raise LLMDisabledError("no model configured for this task")
         try:
             resp = self._get_client().responses.parse(
-                model=self.model,
+                model=model,
                 instructions=system,
                 input=user,
                 text_format=schema,
@@ -91,7 +99,7 @@ class OpenAILLM:
         return StructuredResult(
             parsed=parsed,
             provider=self.provider,
-            model=self.model,
+            model=model,
             input_tokens=int(usage.input_tokens),
             output_tokens=int(usage.output_tokens),
         )

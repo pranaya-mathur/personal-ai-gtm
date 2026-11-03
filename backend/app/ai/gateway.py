@@ -84,9 +84,9 @@ class LLMGateway:
             est = self.estimate_usd(system, prompt, max_out)
             if self.run_spent_usd(run_id) + est > self.settings.llm_spend_limit_per_run_usd:
                 raise SpendLimitExceeded("per-run LLM spend limit would be exceeded")
-            self.spend.check(est, run_id)
+            self.spend.check(est, run_id, "openai" if not self.client.is_mock else None)
             try:
-                result = self._call_with_retries(system, prompt, schema, max_out)
+                result = self._call_with_retries(task, system, prompt, schema, max_out)
             except LLMRefusalError as exc:
                 self._store(task, opportunity_id, run_id, None, False, f"refused: {exc}")
                 return None
@@ -118,7 +118,7 @@ class LLMGateway:
         self._store(task, opportunity_id, run_id, None, False, f"validation: {last_reason}")
         return None
 
-    def _call_with_retries(self, system: str, user: str, schema: type[T], max_out: int):  # type: ignore[no-untyped-def]
+    def _call_with_retries(self, task: str, system: str, user: str, schema: type[T], max_out: int):  # type: ignore[no-untyped-def]
         for attempt in Retrying(
             retry=retry_if_exception_type(LLMTransientError),
             stop=stop_after_attempt(self.settings.llm_max_retries),
@@ -126,7 +126,9 @@ class LLMGateway:
             reraise=True,
         ):
             with attempt:
-                return self.client.complete_structured(system, user, schema, max_out)
+                return self.client.complete_structured(
+                    system, user, schema, max_out, self.settings.model_for(task) or None
+                )
 
     # ---- persistence ----------------------------------------------------------------------
     def _ledger(self, task, opportunity_id, run_id, result, cost, outcome) -> None:  # type: ignore[no-untyped-def]

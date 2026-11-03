@@ -46,6 +46,7 @@ class WorkflowState(TypedDict, total=False):
     query: dict[str, Any]
     opportunity_ids: list[str]
     errors: list[str]
+    connector_stats: list[dict[str, Any]]
     source_checks: dict[str, Any]
     ai: dict[str, Any]
     ai_results: dict[str, dict[str, Any]]
@@ -87,7 +88,11 @@ def build_graph(
                 DiscoveryQuery(**state["query"]), uuid.UUID(state["run_id"])
             )
             ids = sorted(set(state.get("opportunity_ids", [])) | set(result["opportunity_ids"]))
-            return {"opportunity_ids": ids, "errors": [*state.get("errors", []), *result["errors"]]}
+            return {
+                "opportunity_ids": ids,
+                "errors": [*state.get("errors", []), *result["errors"]],
+                "connector_stats": [*state.get("connector_stats", []), *result["connector_stats"]],
+            }
 
         return run
 

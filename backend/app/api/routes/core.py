@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select, text
@@ -16,15 +17,27 @@ from app.models import (
     LlmUsage,
     Opportunity,
     OpportunityEvidence,
+    Organization,
     OutreachDraft,
+    ProviderSpend,
+    Qualification,
     SearchProfile,
     WorkflowRun,
 )
-from app.models.enums import OpportunityCategory, OutreachStatus, VerificationStatus
+from app.models.enums import (
+    OpportunityCategory,
+    OpportunityStatus,
+    OutreachStatus,
+    RunStatus,
+    VerificationStatus,
+)
 from app.orchestrator.runner import enqueue_run
 from app.schemas.api import (
     AnalysisOut,
     ApprovalRequest,
+    BoardRow,
+    BudgetLine,
+    CostSummary,
     DraftOut,
     DraftUpdate,
     EvidenceOut,
@@ -320,3 +333,140 @@ def reject_draft(
 @router.get("/metrics")
 def metrics(db: Session = Depends(get_db)) -> dict[str, object]:
     return PipelineAnalyticsAgent(db).run()
+
+
+def next_action(opp: Opportunity, score: float | None) -> str:
+    """Deterministic recommendation (no LLM): what a human should do next."""
+    if opp.verification_status == VerificationStatus.STALE:
+        return "Source is stale: re-check the original posting before any action"
+    if opp.status == OpportunityStatus.DISQUALIFIED:
+        return "Disqualified: no action"
+    if opp.verification_status != VerificationStatus.VERIFIED:
+        return "Open the source URL and verify the requirement, then mark it verified"
+    if opp.category == OpportunityCategory.SPECULATIVE_PROSPECT:
+        return "Speculative: find a source that states an actual need before outreach"
+    if opp.status == OpportunityStatus.QUALIFIED:
+        return "Review the pending draft; approve it yourself if it is accurate"
+    if score is None:
+        return "Awaiting qualification"
+    return f"Review qualification (score {score})"
+
+
+@router.get("/board", response_model=list[BoardRow])
+def board(
+    category: OpportunityCategory | None = None, db: Session = Depends(get_db)
+) -> list[BoardRow]:
+    stmt = select(Opportunity).order_by(Opportunity.last_seen_at.desc()).limit(200)
+    if category:
+        stmt = stmt.where(Opportunity.category == category)
+    rows: list[BoardRow] = []
+    for opp in db.execute(stmt).scalars():
+        org = db.get(Organization, opp.organization_id) if opp.organization_id else None
+        qual = (
+            db.execute(
+                select(Qualification)
+                .where(Qualification.opportunity_id == opp.id)
+                .order_by(Qualification.created_at.desc())
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+        evs = list(
+            db.execute(
+                select(Evidence)
+                .join(OpportunityEvidence, OpportunityEvidence.evidence_id == Evidence.id)
+                .where(OpportunityEvidence.opportunity_id == opp.id)
+                .order_by(Evidence.retrieved_at)
+            ).scalars()
+        )
+        budget = summary = None
+        for a in db.execute(
+            select(AiAnalysis)
+            .where(AiAnalysis.opportunity_id == opp.id, AiAnalysis.validated.is_(True))
+            .order_by(AiAnalysis.created_at.desc())
+        ).scalars():
+            out = a.output or {}
+            if budget is None and a.task == "requirement_extraction" and out.get("budget"):
+                budget = out["budget"].get("text")
+            if summary is None and a.task == "opportunity_analysis":
+                summary = out.get("summary")
+        score = qual.score if qual else None
+        rows.append(
+            BoardRow(
+                id=opp.id,
+                category=opp.category,
+                title=opp.title,
+                status=opp.status,
+                verification_status=opp.verification_status,
+                confidence=opp.confidence,
+                organization=org.name if org else None,
+                organization_kind=org.kind if org else None,
+                country=org.country if org else None,
+                domain=org.domain if org else None,
+                is_mock=bool(evs) and all(e.provider.startswith("mock") for e in evs),
+                score=score,
+                qualification_rationale=qual.rationale if qual else None,
+                evidence_count=len(evs),
+                source_url=evs[0].source_url if evs else None,
+                published_at=evs[0].published_at if evs else None,
+                stated_budget=budget,
+                ai_summary=summary,
+                next_action=next_action(opp, score),
+                last_seen_at=opp.last_seen_at,
+            )
+        )
+    return rows
+
+
+@router.post("/runs/{run_id}/cancel", response_model=RunOut)
+def cancel_run(run_id: uuid.UUID, db: Session = Depends(get_db)) -> WorkflowRun:
+    """Cancels a queued or running job. A running job stops at the next node boundary."""
+    run = db.get(WorkflowRun, run_id)
+    if run is None:
+        raise HTTPException(404, "run not found")
+    if run.status in (RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED):
+        raise HTTPException(409, f"run already {run.status}")
+    run.status = RunStatus.CANCELLED
+    run.finished_at = utcnow()
+    db.commit()
+    return run
+
+
+@router.get("/costs", response_model=CostSummary)
+def costs(db: Session = Depends(get_db)) -> CostSummary:
+    s = get_settings()
+
+    def total(prefix: str | None = None, since: datetime | None = None) -> float:
+        stmt = select(func.coalesce(func.sum(ProviderSpend.amount_usd), 0))
+        if prefix:
+            stmt = stmt.where(ProviderSpend.provider.like(f"{prefix}%"))
+        if since:
+            stmt = stmt.where(ProviderSpend.created_at >= since)
+        return float(db.execute(stmt).scalar_one())
+
+    now = utcnow()
+    day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    lines = []
+    for family, cap in (("openai", s.openai_test_budget_usd), ("apify", s.apify_test_budget_usd)):
+        spent = total(family)
+        lines.append(
+            BudgetLine(
+                family=family,
+                spent_usd=spent,
+                cap_usd=cap,
+                remaining_usd=None if cap is None else max(0.0, cap - spent),
+            )
+        )
+    return CostSummary(
+        lines=lines,
+        total_spent_usd=total(),
+        total_cap_usd=s.total_test_budget_usd,
+        today_usd=total(since=day),
+        month_usd=total(since=day.replace(day=1)),
+        note=(
+            "Estimated from token usage and Actor-reported charges. Provider billing can lag and "
+            "an in-flight call can overshoot a cap by up to its own cost; reconcile in the "
+            "provider consoles."
+        ),
+    )

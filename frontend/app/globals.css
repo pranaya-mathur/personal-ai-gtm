@@ -21,3 +21,6 @@ table { width:100%; border-collapse:collapse; font-size:13px; }
 th,td { text-align:left; padding:6px 8px; border-top:1px solid var(--line); vertical-align:top; }
 a { color:var(--accent); }
 .item button { margin-top:6px; padding:3px 10px; font-size:12px; }
+blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid #888; white-space: pre-wrap; }
+pre { max-height: 220px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
+button[aria-pressed="true"] { font-weight: 700; outline: 2px solid currentColor; }

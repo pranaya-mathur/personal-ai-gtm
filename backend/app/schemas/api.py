@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.connectors.base import DiscoveryQuery
 
@@ -70,6 +70,11 @@ class EvidenceOut(ORM):
     source_check_status: str
     source_checked_at: datetime | None = None
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_mock(self) -> bool:
+        return self.provider.startswith("mock")
+
 
 class OpportunityOut(ORM):
     id: uuid.UUID
@@ -117,3 +122,44 @@ class AnalysisOut(ORM):
     validated: bool
     rejection_reason: str | None
     created_at: datetime
+
+
+class BoardRow(BaseModel):
+    """One dashboard row: everything a reviewer needs, derived only from stored data."""
+
+    id: uuid.UUID
+    category: str
+    title: str
+    status: str
+    verification_status: str
+    confidence: float
+    organization: str | None
+    organization_kind: str | None
+    country: str | None
+    domain: str | None
+    is_mock: bool
+    score: float | None
+    qualification_rationale: str | None
+    evidence_count: int
+    source_url: str | None
+    published_at: datetime | None
+    stated_budget: str | None  # None means unknown; never guessed
+    ai_summary: str | None
+    next_action: str
+    last_seen_at: datetime
+
+
+class BudgetLine(BaseModel):
+    family: str
+    spent_usd: float
+    cap_usd: float | None
+    remaining_usd: float | None
+
+
+class CostSummary(BaseModel):
+    lines: list[BudgetLine]
+    total_spent_usd: float
+    total_cap_usd: float | None
+    today_usd: float
+    month_usd: float
+    note: str

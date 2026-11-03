@@ -25,3 +25,8 @@
 23. **AI is advisory.** Evidence category stays deterministic. AI qualification blends 40% into the rubric score only when validated; an AI "unsupported" verdict blocks `qualified`. AI outreach drafts keep `[YOUR RELEVANT EXPERIENCE]` / `[PROPOSED NEXT STEP]` placeholders (the sender's experience is unknown), so the approval gate still forces a human edit.
 24. **Evidence is untrusted input.** Prompts fence it in `<evidence>` tags and tell the model to treat it as data; the claim guard is the real defence against prompt injection.
 25. **Cost bounds.** Pre-call worst-case estimate (chars/3 input + max output tokens) must fit the per-run LLM limit and global limits; at most `AI_MAX_OPPORTUNITIES_PER_RUN` opportunities (default 10) get AI; exhausted budget degrades to deterministic output instead of failing the run.
+
+26. **Per-task models** (`OPENAI_*_MODEL`) fall back to `OPENAI_MODEL`; a failing model is never silently replaced.
+27. **Test budgets** (`*_TEST_BUDGET_USD`) are lifetime caps per provider family plus a total, checked pre-call on the shared `provider_spend` ledger.
+28. **Cancellation/timeouts**: `cancelled` run status (migration 0004), checked between graph nodes; a run exceeding `RUN_TIMEOUT_SECONDS` fails terminally.
+29. **Mock isolation**: records whose evidence is all from `mock*` providers are flagged `is_mock` and never counted as leads in the dashboard.

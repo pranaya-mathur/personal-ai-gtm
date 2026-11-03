@@ -41,5 +41,10 @@ class LLMClient(Protocol):
         ...
 
     def complete_structured(
-        self, system: str, user: str, schema: type[T], max_output_tokens: int
+        self,
+        system: str,
+        user: str,
+        schema: type[T],
+        max_output_tokens: int,
+        model: str | None = None,
     ) -> StructuredResult: ...

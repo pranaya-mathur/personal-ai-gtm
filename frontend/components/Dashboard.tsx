@@ -2,10 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  api, CATEGORY_LABEL, groupByCategory,
+  api, CATEGORY_LABEL, splitReal, groupByCategory,
   runProgress, type AiStatus, type AiUsage, type Category, type Connector, type Draft, type Evidence, type Metrics,
-  type Opportunity, type Profile, type Run,
+  type BoardRow, type CostSummary, type Opportunity, type Profile, type Run,
 } from "@/lib/api";
+import { CostPanel, OperationsView, OpportunityView, PartnershipView, ResearchDetail } from "./Views";
+
+type Tab = "overview" | "opportunities" | "partnerships" | "operations" | "research";
+const TABS: [Tab, string][] = [
+  ["overview", "Overview"], ["opportunities", "Opportunities"], ["partnerships", "Partnerships"],
+  ["operations", "Discovery operations"], ["research", "Research detail"],
+];
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
@@ -19,13 +26,20 @@ export default function Dashboard() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [board, setBoard] = useState<BoardRow[]>([]);
+  const [costs, setCosts] = useState<CostSummary | null>(null);
+  const [tab, setTab] = useState<Tab>("overview");
+  const [selected, setSelected] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [m, o, r, d, e, c, p, ai, au] = await Promise.all([
+      const [m, o, r, d, e, c, p, ai, au, b, co] = await Promise.all([
         api.metrics(), api.opportunities(), api.runs(), api.drafts(),
         api.evidence(), api.connectors(), api.profiles(), api.aiStatus(), api.aiUsage(),
+        api.board(), api.costs(),
       ]);
+      setBoard(b); setCosts(co); setLoaded(true);
       setMetrics(m); setOpps(o); setRuns(r); setDrafts(d);
       setEvidence(e); setConnectors(c); setProfiles(p); setAiStatus(ai); setAiUsage(au); setError(null);
     } catch (e) {
@@ -39,7 +53,13 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [load]);
 
-  const grouped = groupByCategory(opps);
+  const grouped = groupByCategory(splitReal(board).real);
+  const open = (id: string) => { setSelected(id); setTab("research"); };
+  const { real } = splitReal(board);
+  const realCount = real.length;
+  const confirmed = real.filter((r) => r.category === "confirmed_demand" && r.verification_status === "verified").length;
+  const partners = real.filter((r) => r.category === "verified_partnership" && r.status === "qualified").length;
+  const pending = splitReal(board).real.filter((r) => r.status === "new" && r.verification_status === "unverified").length;
 
   return (
     <main>
@@ -60,19 +80,54 @@ export default function Dashboard() {
       </header>
 
       {error && <p className="err">Cannot reach API: {error}</p>}
+      {!error && !loaded && <p className="muted">Loading…</p>}
+
+      <nav style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0" }}>
+        {TABS.map(([t, label]) => (
+          <button key={t} aria-pressed={tab === t} onClick={() => setTab(t)}>{label}</button>
+        ))}
+      </nav>
+
+      {tab === "opportunities" && <OpportunityView rows={board} onOpen={open} />}
+      {tab === "partnerships" && <PartnershipView rows={board} onOpen={open} />}
+      {tab === "operations" && (
+        <OperationsView runs={runs} onCancel={async (id) => { await api.cancelRun(id); await load(); }} />
+      )}
+      {tab === "research" && <ResearchDetail id={selected} row={board.find((r) => r.id === selected)} />}
+
+      {tab === "overview" && <>
+      <section className="grid stats">
+        <div className="card stat"><span className="muted">Real opportunities</span><b>{realCount}</b></div>
+        <div className="card stat"><span className="muted">Verified active requirements</span><b>{confirmed}</b></div>
+        <div className="card stat"><span className="muted">Qualified partnership prospects</span><b>{partners}</b></div>
+        <div className="card stat"><span className="muted">Pending research</span><b>{pending}</b></div>
+      </section>
+      <section className="grid cols3"><CostPanel costs={costs} /></section>
+      {board.length > 0 && realCount === 0 && (
+        <p className="muted">All {board.length} records are fictional mock fixtures; no real leads have been discovered yet.</p>
+      )}
 
       <section className="grid stats">
         <div className="card stat"><span className="muted">Pending approvals</span><b>{metrics?.drafts_pending_approval ?? "–"}</b></div>
         <div className="card stat"><span className="muted">Provider spend (USD)</span><b>{metrics ? metrics.total_provider_spend_usd.toFixed(2) : "–"}</b></div>
-        <div className="card stat"><span className="muted">Opportunities</span><b>{opps.length}</b></div>
+        <div className="card stat"><span className="muted">All records (incl. mock)</span><b>{opps.length}</b></div>
         <div className="card stat"><span className="muted">Recent runs</span><b>{runs.length}</b></div>
       </section>
+
+      {splitReal(board).mock.length > 0 && (
+        <section className="card">
+          <h2>Mock fixtures — fictional, not leads ({splitReal(board).mock.length})</h2>
+          {splitReal(board).mock.map((m) => (
+            <div className="item" key={m.id}><span className="badge err">MOCK</span>{m.title}</div>
+          ))}
+        </section>
+      )}
 
       <section className="grid cols3">
         {(Object.keys(CATEGORY_LABEL) as Category[]).map((c) => (
           <div className="card" key={c}>
             <h2>{CATEGORY_LABEL[c]} ({grouped[c].length})</h2>
-            {grouped[c].length === 0 && <span className="muted">None yet</span>}
+            {grouped[c].length === 0 && <span className="muted">No real records yet</span>}
             {grouped[c].map((o) => (
               <div className="item" key={o.id}>
                 {o.title}
@@ -176,6 +231,7 @@ export default function Dashboard() {
           </tbody>
         </table>
       </section>
+      </>}
     </main>
   );
 }

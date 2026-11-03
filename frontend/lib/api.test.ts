@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupByCategory, runProgress, type Opportunity, type Run } from "./api";
+import { groupByCategory, jobTotals, runProgress, splitReal, type BoardRow, type Opportunity, type Run } from "./api";
 
 const o = (id: string, category: Opportunity["category"]): Opportunity => ({
   id, category, title: id, status: "new", verification_status: "unverified",
@@ -24,5 +24,23 @@ describe("runProgress", () => {
     expect(runProgress(run([]))).toBe(0);
     expect(runProgress(run(["a", "b", "c"]))).toBe(38);
     expect(runProgress(run(Array(8).fill("x")))).toBe(100);
+  });
+});
+
+describe("splitReal", () => {
+  it("never counts mock fixtures as real leads", () => {
+    const row = (id: string, is_mock: boolean) => ({ id, is_mock }) as BoardRow;
+    const { real, mock } = splitReal([row("a", true), row("b", false)]);
+    expect(real.map((r) => r.id)).toEqual(["b"]);
+    expect(mock.map((r) => r.id)).toEqual(["a"]);
+  });
+});
+
+describe("jobTotals", () => {
+  it("sums per-connector stats and tolerates runs without stats", () => {
+    const stat = (n: number) => ({ connector: "c", is_mock: false, status: "succeeded", retrieved: n, rejected: 1, created: n, duplicates: 2, errors: 0, cost_usd: 0.01 });
+    const run = { state: { connector_stats: [stat(3), stat(4)] } } as unknown as Run;
+    expect(jobTotals(run)).toEqual({ retrieved: 7, rejected: 2, duplicates: 4, errors: 0, cost_usd: 0.02 });
+    expect(jobTotals({ state: {} } as unknown as Run).retrieved).toBe(0);
   });
 });
