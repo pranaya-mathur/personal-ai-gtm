@@ -77,6 +77,30 @@ export interface BoardRow {
   ai_next_action: string | null;
   small_team_fit: string | null;
   external_delivery: string | null;
+  origin: "auto" | "manual";
+  intake: {
+    by: string; at: string; platform: string; channel: string; date_supplied: boolean;
+    delivery_suitability: string | null; reviewer_verification: string;
+  } | null;
+  commercial_class: string;
+}
+
+export interface Deal {
+  id: string;
+  opportunity_id: string;
+  opportunity_title: string | null;
+  stage: string;
+  value_usd: number | null;
+  notes: string | null;
+  next_follow_up_at: string | null;
+  updated_at: string;
+  interactions: { id: string; kind: string; summary: string; occurred_at: string }[];
+}
+
+export interface IntakeInput {
+  source_url: string; platform: string; channel: string; buyer_name?: string; requirement: string;
+  excerpt: string; published_at?: string; status: string; budget_text?: string;
+  contact_route?: string; delivery_suitability?: string;
 }
 
 export interface RouteRow {
@@ -264,12 +288,28 @@ export const api = {
   connectors: () => request<Connector[]>("/connectors"),
   board: () => request<BoardRow[]>("/board"),
   routes: () => request<RouteRow[]>("/routes"),
+  intake: (body: IntakeInput) =>
+    request<BoardRow>("/intake", { method: "POST", body: JSON.stringify(body) }),
   sources: () => request<SourcePerformance>("/sources/performance"),
   costs: () => request<CostSummary>("/costs"),
   cancelRun: (id: string) => request<Run>(`/runs/${id}/cancel`, { method: "POST" }),
   opportunity: (id: string) => request<OpportunityDetail>(`/opportunities/${id}`),
   analyses: (id: string) => request<Analysis[]>(`/opportunities/${id}/analyses`),
   profiles: () => request<Profile[]>("/search-profiles"),
+  deals: (followUps = false) =>
+    request<Deal[]>(`/deals${followUps ? "?follow_ups=true" : ""}`),
+  createDeal: (opportunity_id: string) =>
+    request<Deal>("/deals", { method: "POST", body: JSON.stringify({ opportunity_id }) }),
+  updateDeal: (id: string, body: Partial<{ stage: string; value_usd: number; notes: string; next_follow_up_at: string; clear_follow_up: boolean }>) =>
+    request<Deal>(`/deals/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  addInteraction: (dealId: string, kind: string, summary: string) =>
+    request<Deal>(`/deals/${dealId}/interactions`, {
+      method: "POST", body: JSON.stringify({ kind, summary }),
+    }),
+  markDraftSent: (id: string) =>
+    request<Draft>(`/drafts/${id}/mark-sent`, { method: "POST" }),
+  queryPerformance: () =>
+    request<{ queries: { query: string; channel: string; useful: number; cost_usd: number }[] }>("/queries/performance"),
 };
 
 export function groupByCategory(items: Opportunity[]): Record<Category, Opportunity[]> {
@@ -309,5 +349,5 @@ export function jobTotals(run: Run): JobTotals {
 
 /** Dashboard lists. Mock fixtures are removed first; each real record is in exactly one list. */
 export function viewRows(rows: BoardRow[], view: RecordView): BoardRow[] {
-  return splitReal(rows).real.filter((r) => r.view === view);
+  return splitReal(rows).real.filter((r) => r.view === view && r.origin !== "manual");
 }

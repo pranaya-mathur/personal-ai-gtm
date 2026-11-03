@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import {
   api, jobTotals, splitReal, viewRows,
-  type AiUsage, type Analysis, type BoardRow, type CostSummary, type Filters, NO_FILTERS, type RouteRow, type SourcePerformance, type OpportunityDetail, type RecordView, type Run,
+  type AiUsage, type Analysis, type BoardRow, type CostSummary, type Deal, type Filters, NO_FILTERS, type RouteRow, type SourcePerformance, type OpportunityDetail, type RecordView, type Run,
 } from "@/lib/api";
 
 const MOCK_BADGE = <span className="badge err" title="Fictional fixture, not a real lead">MOCK FIXTURE</span>;
@@ -298,5 +298,157 @@ export function SpendView({ costs, usage }: { costs: CostSummary | null; usage: 
         ))}
       </div>
     </section>
+  );
+}
+
+
+const EMPTY_INTAKE = {
+  source_url: "", platform: "reddit", channel: "direct_buyer", buyer_name: "", requirement: "",
+  excerpt: "", published_at: "", status: "unknown", budget_text: "", contact_route: "", delivery_suitability: "",
+};
+
+export function IntakeView({ rows, onSaved, onOpen }: { rows: BoardRow[]; onSaved: () => void; onOpen: (id: string) => void }) {
+  const [f, setF] = useState(EMPTY_INTAKE);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const set = (k: keyof typeof EMPTY_INTAKE) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const manual = rows.filter((r) => r.origin === "manual");
+  async function submit() {
+    setBusy(true); setMsg(null);
+    try {
+      const body = Object.fromEntries(Object.entries(f).filter(([, v]) => v !== "")) as unknown as import("@/lib/api").IntakeInput;
+      if (f.published_at) body.published_at = new Date(f.published_at).toISOString();
+      await api.intake(body);
+      setF(EMPTY_INTAKE); setMsg("Saved. It is stored as an unverified, human-supplied record."); onSaved();
+    } catch (e) { setMsg(e instanceof Error ? `Not saved: ${e.message}` : "Not saved"); } finally { setBusy(false); }
+  }
+  return (
+    <>
+      <section className="card">
+        <h2>Add a lead you found (human-reviewed)</h2>
+        <p className="muted">Paste only text you are permitted to copy. Nothing is fetched or inferred; leave unknown fields empty. These records stay separate from automatic discovery and start unverified.</p>
+        <div style={{ display: "grid", gap: 8, maxWidth: 720 }}>
+          <label>Original post URL<input value={f.source_url} onChange={set("source_url")} placeholder="https://…" /></label>
+          <label>Platform
+            <select value={f.platform} onChange={set("platform")}>
+              {["reddit", "linkedin", "facebook", "slack", "discord", "forum", "email", "other"].map((p) => <option key={p}>{p}</option>)}
+            </select></label>
+          <label>Channel
+            <select value={f.channel} onChange={set("channel")}><option value="direct_buyer">direct buyer</option><option value="agency">agency seeking partners</option></select></label>
+          <label>Buyer / agency name (if shown)<input value={f.buyer_name} onChange={set("buyer_name")} /></label>
+          <label>Requirement (one line)<input value={f.requirement} onChange={set("requirement")} /></label>
+          <label>Verbatim excerpt<textarea rows={4} value={f.excerpt} onChange={set("excerpt")} /></label>
+          <label>Post date (if shown)<input type="date" value={f.published_at} onChange={set("published_at")} /></label>
+          <label>Still open?
+            <select value={f.status} onChange={set("status")}><option value="unknown">unknown</option><option value="open">open</option><option value="closed">closed</option></select></label>
+          <label>Budget as stated<input value={f.budget_text} onChange={set("budget_text")} placeholder="e.g. $4,000" /></label>
+          <label>Contact / application route (email or link)<input value={f.contact_route} onChange={set("contact_route")} /></label>
+          <label>Delivery suitability (your note)<input value={f.delivery_suitability} onChange={set("delivery_suitability")} /></label>
+          <div><button disabled={busy} onClick={() => void submit()}>{busy ? "Saving…" : "Save lead"}</button> {msg && <span className="muted">{msg}</span>}</div>
+        </div>
+      </section>
+      <RecordsList rows={manual} onOpen={onOpen} />
+    </>
+  );
+}
+
+function RecordsList({ rows, onOpen }: { rows: BoardRow[]; onOpen: (id: string) => void }) {
+  return (
+    <section className="card" style={{ overflowX: "auto" }}>
+      <h2>Manually added leads ({rows.length})</h2>
+      {rows.length === 0 ? <p className="muted">None yet.</p> : (
+        <table>
+          <thead><tr><th>Added by</th><th>Platform</th><th>Requirement</th><th>Status</th><th>Budget</th><th>Contact</th><th>Qualification</th><th>Next action</th></tr></thead>
+          <tbody>{rows.map((r) => (
+            <tr key={r.id}>
+              <td>{r.intake?.by ?? "–"}</td><td>{r.intake?.platform ?? "–"}</td>
+              <td><a href="#" onClick={(e) => { e.preventDefault(); onOpen(r.id); }}>{r.title}</a>
+                <div className="muted">{r.published_at ? new Date(r.published_at).toLocaleDateString() : "date not supplied"} · <span className="badge">{r.verification_status}</span></div></td>
+              <td>{r.source_status}</td><td>{r.stated_budget ?? "unknown"}</td>
+              <td>{r.routes.length ? r.routes.map((x) => x.value).join(", ") : "none supplied"}</td>
+              <td><span className="badge">{r.triage}</span>{r.rejection_reason && <span className="badge err">{r.rejection_reason}</span>}
+                <div className="muted">{r.intake?.delivery_suitability ?? ""}</div></td>
+              <td>{r.next_action}</td>
+            </tr>))}</tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+const STAGES = ["identified", "contacted", "conversation", "proposal", "negotiation", "won", "lost"];
+const KINDS = ["note", "email_sent", "email_received", "call", "meeting", "proposal_sent", "follow_up", "outcome"];
+
+export function EngagementView({
+  deals, board, onRefresh, onOpen,
+}: { deals: Deal[]; board: BoardRow[]; onRefresh: () => void; onOpen: (id: string) => void }) {
+  const [oppId, setOppId] = useState("");
+  const [note, setNote] = useState("");
+  const [kind, setKind] = useState("note");
+  const [msg, setMsg] = useState<string | null>(null);
+  const actionable = board.filter((r) => !r.is_mock && (r.triage === "actionable" || r.triage === "needs_verification"));
+  const followUps = deals.filter((d) => d.next_follow_up_at && new Date(d.next_follow_up_at) <= new Date());
+
+  async function startDeal() {
+    if (!oppId) return;
+    setMsg(null);
+    try { await api.createDeal(oppId); setOppId(""); onRefresh(); }
+    catch (e) { setMsg(e instanceof Error ? e.message : "failed"); }
+  }
+
+  return (
+    <>
+      <section className="card">
+        <h2>Engagement pipeline</h2>
+        <p className="muted">Track contact, responses, meetings, proposals and outcomes. Nothing is sent automatically — mark drafts sent only after you transmit them yourself.</p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
+          <label>Start deal from opportunity
+            <select value={oppId} onChange={(e) => setOppId(e.target.value)} style={{ minWidth: 280 }}>
+              <option value="">select…</option>
+              {actionable.map((r) => <option key={r.id} value={r.id}>{r.title.slice(0, 80)}</option>)}
+            </select>
+          </label>
+          <button onClick={() => void startDeal()}>Create / open deal</button>
+          {msg && <span className="muted">{msg}</span>}
+        </div>
+        {followUps.length > 0 && <p className="err">{followUps.length} follow-up(s) due.</p>}
+      </section>
+      <section className="card" style={{ overflowX: "auto" }}>
+        <h2>Deals ({deals.length})</h2>
+        {deals.length === 0 ? <Empty what="deals" /> : (
+          <table>
+            <thead><tr><th>Opportunity</th><th>Stage</th><th>Value</th><th>Follow-up</th><th>Log activity</th><th>Recent</th></tr></thead>
+            <tbody>{deals.map((d) => (
+              <tr key={d.id}>
+                <td><a href="#" onClick={(e) => { e.preventDefault(); onOpen(d.opportunity_id); }}>{d.opportunity_title ?? d.opportunity_id}</a></td>
+                <td>
+                  <select value={d.stage} onChange={(e) => void api.updateDeal(d.id, { stage: e.target.value }).then(onRefresh)}>
+                    {STAGES.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </td>
+                <td>{d.value_usd ?? "unknown"}</td>
+                <td>
+                  <input type="date" defaultValue={d.next_follow_up_at ? d.next_follow_up_at.slice(0, 10) : ""}
+                    onChange={(e) => void api.updateDeal(d.id, e.target.value
+                      ? { next_follow_up_at: new Date(e.target.value).toISOString() }
+                      : { clear_follow_up: true }).then(onRefresh)} />
+                </td>
+                <td>
+                  <select value={kind} onChange={(e) => setKind(e.target.value)}>{KINDS.map((k) => <option key={k}>{k}</option>)}</select>
+                  <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="summary" style={{ width: 160 }} />
+                  <button onClick={() => {
+                    if (!note.trim()) return;
+                    void api.addInteraction(d.id, kind, note).then(() => { setNote(""); onRefresh(); });
+                  }}>Add</button>
+                </td>
+                <td>{d.interactions.slice(0, 3).map((i) => (
+                  <div className="muted" key={i.id}>{i.kind}: {i.summary.slice(0, 80)}</div>
+                ))}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        )}
+      </section>
+    </>
   );
 }

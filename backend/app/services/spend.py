@@ -133,6 +133,22 @@ class SpendGuard:
         self.session.flush()
         return Reservation(row.id, amount)
 
+    def annotate(self, reservation: Reservation, note: str) -> None:
+        """Attach the provider run id to the reserved row (committed immediately)."""
+        stmt = (
+            update(ProviderSpend)
+            .where(ProviderSpend.id == reservation.id)
+            .values(description=f"reserved;{note}")
+        )
+        bind = self.session.get_bind()
+        if bind.dialect.name == "postgresql":
+            with Session(bind) as s:
+                s.execute(stmt)
+                s.commit()
+        else:
+            self.session.execute(stmt)
+            self.session.flush()
+
     def settle(self, reservation: Reservation, actual_usd: float) -> None:
         """Replace the estimate with the provider-reported/computed actual. Never called for
         failed or unmetered calls: those keep the full estimate (conservative)."""

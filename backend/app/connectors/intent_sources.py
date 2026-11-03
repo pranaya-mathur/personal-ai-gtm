@@ -166,10 +166,11 @@ class SearchIntentConnector:
         self.settings, self._transport, self._checker = settings, transport, checker
 
     def queries(self) -> list[tuple[str, str]]:
-        s = self.settings
-        return [("agency", q) for q in s.intent_queries_agency_list] + [
-            ("buyer", q) for q in s.intent_queries_buyer_list
-        ]
+        """Configured templates plus facet expansions; duplicates removed. Paid spend still gated."""
+        from app.services.query_strategy import build_plan
+
+        plan = build_plan(self.settings)
+        return [(p.channel, p.text) for p in plan]
 
     def estimate_cost(self, query: DiscoveryQuery) -> CostEstimate:
         n = len(self.queries())
@@ -288,14 +289,16 @@ class ApifySearchIntentConnector(SearchIntentConnector):
         return [e.strip() for e in self.settings.apify_search_engines.split(",") if e.strip()]
 
     def _plan(self) -> list[tuple[str, str, list[str]]]:
-        """(engine, channel, queries) runs."""
+        """(engine, channel, queries) runs. Uses the shared query strategy; Bing stays capped."""
+        from app.services.query_strategy import build_plan
+
+        by_channel: dict[str, list[str]] = {"agency": [], "buyer": []}
+        for p in build_plan(self.settings):
+            by_channel.setdefault(p.channel, []).append(p.text)
         s = self.settings
         plan: list[tuple[str, str, list[str]]] = []
         for engine in self._engines():
-            for channel, qs in (
-                ("agency", s.intent_queries_agency_list),
-                ("buyer", s.intent_queries_buyer_list),
-            ):
+            for channel, qs in by_channel.items():
                 chosen = qs[: s.apify_search_bing_queries] if engine == "bing" else qs
                 if chosen:
                     plan.append((engine, channel, chosen))
@@ -345,7 +348,12 @@ class ApifySearchIntentConnector(SearchIntentConnector):
         for engine, channel, queries in self._plan():
             actor = GOOGLE_ACTOR if engine == "google" else BING_ACTOR
             cap = max(round(self._run_cost(engine, len(queries)), 4), PROVIDER_CAP_FLOOR_USD)
-            run = client.run_actor(actor, self._input(engine, queries, query), cap)
+            run = client.run_actor(
+                actor,
+                self._input(engine, queries, query),
+                cap,
+                getattr(self, "on_run_submitted", None),
+            )
             used = run.get("usageTotalUsd")
             cost += float(used) if isinstance(used, int | float) else cap
             for item in client.dataset_items(run["defaultDatasetId"], 50):

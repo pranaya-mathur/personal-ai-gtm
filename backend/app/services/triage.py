@@ -168,23 +168,41 @@ def stage_a(
     return TechnicalRelevance.UNCLEAR, info
 
 
+_SYMBOLS = {"€": "EUR", "£": "GBP", "$": "USD"}  # "$" is compared as USD (approximation)
+
+
+def _number(raw: str) -> float | None:
+    """Parse '4,000', '1,278,934.80', '1.278.934,80', '1278934.8' without guessing wildly."""
+    raw = raw.strip(".,")
+    if "," in raw and "." in raw:
+        decimal = "," if raw.rfind(",") > raw.rfind(".") else "."
+        thousands = "." if decimal == "," else ","
+        raw = raw.replace(thousands, "").replace(decimal, ".")
+    elif "," in raw:
+        raw = (
+            raw.replace(",", "")
+            if re.fullmatch(r"\d{1,3}(,\d{3})+", raw)
+            else raw.replace(",", ".")
+        )
+    elif raw.count(".") > 1:
+        raw = raw.replace(".", "")
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 def _parse_value(budget_text: str | None) -> tuple[float | None, str]:
     if not budget_text:
         return None, ""
-    m = _AMOUNT.search(budget_text.replace(" ", ""))
-    cur = (m.group(2) or "").upper() if m else ""
+    text = budget_text.replace(" ", "")
+    symbol = next((cur for sym, cur in _SYMBOLS.items() if sym in text), "")
+    m = _AMOUNT.search(text)
+    cur = ((m.group(2) or "").upper() if m else "") or symbol
     if not m or cur not in _CURRENCIES:
         return None, cur
-    raw = m.group(1)
-    try:
-        value = (
-            float(raw.replace(",", ""))
-            if "," in raw and "." in raw
-            else float(raw.replace(",", "."))
-        )
-    except ValueError:
-        return None, cur
-    return value, cur
+    value = _number(m.group(1))
+    return (value, cur) if value is not None else (None, cur)
 
 
 def _deal_size(budget_text: str | None, s: Settings) -> tuple[str, str]:

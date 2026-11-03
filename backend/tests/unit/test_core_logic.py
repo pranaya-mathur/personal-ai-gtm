@@ -3,14 +3,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.agents.qualification import score_opportunity
 from app.connectors.base import DiscoveryConnector, RawFinding, SignalKind
 from app.connectors.mock import MockAgencyConnector, MockOpportunityConnector
 from app.connectors.registry import build_connectors
 from app.models import OutreachDraft
-from app.models.enums import OpportunityCategory
+from app.models.enums import OpportunityCategory, Triage
 from app.services.dedupe import evidence_hash, is_fresh, opportunity_dedupe_key
 from app.services.ingest import classify
+from app.services.ranking import score_opportunity
 from app.services.spend import SpendGuard, SpendLimitExceeded
 
 
@@ -82,9 +82,25 @@ def test_score_rubric() -> None:
         "has_publication_date": True,
         "has_source_url": True,
         "known_contacts": 1,
+        "has_contact_route": True,
+        "source_confirmed": True,
     }
-    strong, _ = score_opportunity("confirmed_demand", 0.8, research)
-    weak, _ = score_opportunity("speculative_prospect", 0.3, {"all_fresh": False})
+    strong, _ = score_opportunity(
+        channel="direct_buyer",
+        category=OpportunityCategory.CONFIRMED_DEMAND,
+        triage=Triage.ACTIONABLE,
+        confidence=0.8,
+        research=research,
+        deal_size_result="pass",
+        age_days=5,
+    )
+    weak, _ = score_opportunity(
+        channel="direct_buyer",
+        category=OpportunityCategory.SPECULATIVE_PROSPECT,
+        triage=Triage.NEEDS_VERIFICATION,
+        confidence=0.3,
+        research={"all_fresh": False},
+    )
     assert strong > 60 > weak
 
 

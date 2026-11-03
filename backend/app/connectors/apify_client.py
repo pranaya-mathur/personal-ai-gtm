@@ -6,12 +6,13 @@ Nothing here executes unless the caller passes a token; gating lives in ApifyAct
 """
 
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
 from pydantic import SecretStr
 
-from app.connectors.base import ConnectorError, ConnectorRejected
+from app.connectors.base import ConnectorError, ConnectorRejected, ProviderRunPending
 
 TERMINAL_OK = "SUCCEEDED"
 TERMINAL_BAD = {"FAILED", "ABORTED", "TIMED-OUT"}
@@ -41,8 +42,20 @@ class ApifyClient:
             raise ConnectorError(f"Apify API {resp.status_code}: {resp.text[:200]}")
         return resp.json()
 
+    def fetch_run(self, run_id: str) -> dict[str, Any]:
+        """Read an existing run (free). Used to reconcile a run whose outcome was unknown."""
+        try:
+            data: dict[str, Any] = self._json(self._http.get(f"/v2/actor-runs/{run_id}"))["data"]
+        except httpx.HTTPError as exc:
+            raise ConnectorError(f"Apify transport error: {type(exc).__name__}") from exc
+        return data
+
     def run_actor(
-        self, actor_id: str, run_input: dict[str, Any], max_total_charge_usd: float
+        self,
+        actor_id: str,
+        run_input: dict[str, Any],
+        max_total_charge_usd: float,
+        on_submit: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         path = f"/v2/acts/{actor_id.replace('/', '~')}/runs"
         try:
@@ -54,6 +67,9 @@ class ApifyClient:
             if 400 <= submit.status_code < 500:
                 raise ConnectorRejected(f"Apify rejected the run: {submit.text[:240]}")
             run = self._json(submit)["data"]
+            run_id = str(run["id"])
+            if on_submit is not None:
+                on_submit(run_id)  # recorded BEFORE any waiting, so a timeout cannot lose it
             deadline = time.monotonic() + self._max_wait
             while run["status"] not in {TERMINAL_OK, *TERMINAL_BAD}:
                 if time.monotonic() > deadline:
@@ -61,6 +77,11 @@ class ApifyClient:
                 time.sleep(self._poll)
                 run = self._json(self._http.get(f"/v2/actor-runs/{run['id']}"))["data"]
         except httpx.HTTPError as exc:
+            if "run_id" in locals():
+                raise ProviderRunPending(
+                    f"Apify transport error ({type(exc).__name__}) after submitting run {run_id}",
+                    run_id,
+                ) from exc
             raise ConnectorError(f"Apify transport error: {type(exc).__name__}") from exc
         if run["status"] != TERMINAL_OK:
             raise ConnectorError(f"Apify run ended with status {run['status']}")

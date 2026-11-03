@@ -100,3 +100,12 @@ class ConnectorError(Exception):
 class ConnectorRejected(ConnectorError):
     """The provider refused the request before doing any work (4xx on submit). Nothing was
     billed, so any reserved spend is released and the call is not retried."""
+
+
+class ProviderRunPending(ConnectorError):
+    """A billable provider run WAS submitted but its outcome is unknown (timeout/transport error).
+    The run id is kept so it can be reconciled later; the run must never be submitted again."""
+
+    def __init__(self, message: str, run_id: str) -> None:
+        super().__init__(message)
+        self.run_id = run_id

@@ -990,3 +990,197 @@ def test_billable_connector_is_called_once_even_when_it_fails(session) -> None: 
     )  # type: ignore[list-item]
     assert calls["n"] == 1 and out["errors"]  # no silent re-submission of a paid run
     assert ApifySearchIntentConnector.max_attempts == 1
+
+
+# ------------------------------------------------------------------ provider run ids survive timeouts
+def test_run_id_is_recorded_before_waiting_and_a_timeout_never_resubmits(session) -> None:  # type: ignore[no-untyped-def]
+    from pydantic import SecretStr
+
+    from app.agents.discovery import OpportunityIntelligenceAgent
+    from app.connectors.apify_client import ApifyClient
+    from app.connectors.intent_sources import ApifySearchIntentConnector
+    from app.models import ProviderSpend
+    from app.services.spend import SpendGuard
+
+    posts = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST":
+            posts["n"] += 1
+            return httpx.Response(201, json={"data": {"id": "RUN123", "status": "RUNNING"}})
+        raise httpx.ReadTimeout("slow", request=req)  # polling times out
+
+    s = Settings(
+        database_url="sqlite://", apify_paid_execution_approved=True, apify_test_budget_usd=0.25
+    )
+    c = ApifySearchIntentConnector(
+        s, ApifyClient(SecretStr("t"), transport=httpx.MockTransport(handler), poll_seconds=0), None
+    )
+    out = OpportunityIntelligenceAgent(session, [c], SpendGuard(session, s)).run(
+        DiscoveryQuery(), None
+    )
+    assert (
+        posts["n"] == 2 or posts["n"] == 1
+    )  # one submit per planned run; never a re-submit of the same
+    assert out["errors"] and "RUN123" in out["errors"][0]
+    desc = [r.description for r in session.execute(select(ProviderSpend)).scalars()]
+    assert any("apify_run:RUN123" in d for d in desc)  # the id is in the ledger for reconciliation
+
+
+def test_reconcile_settles_a_finished_run_from_the_providers_record_without_rerunning(
+    session,
+) -> None:  # type: ignore[no-untyped-def]
+    from pydantic import SecretStr
+
+    from app.cli.reconcile import reconcile
+    from app.connectors.apify_client import ApifyClient
+    from app.models import ProviderSpend
+
+    session.add(
+        ProviderSpend(provider="apify:x", amount_usd=0.0361, description="reserved;apify_run:RUN9")
+    )
+    session.add(
+        ProviderSpend(provider="apify:x", amount_usd=0.05, description="reserved;apify_run:RUN8")
+    )
+    session.flush()
+    requests: list[httpx.Request] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        requests.append(req)
+        rid = req.url.path.rsplit("/", 1)[-1]
+        body = {
+            "id": rid,
+            "status": "SUCCEEDED" if rid == "RUN9" else "RUNNING",
+            "usageTotalUsd": 0.01005,
+        }
+        return httpx.Response(200, json={"data": body})
+
+    client = ApifyClient(SecretStr("t"), transport=httpx.MockTransport(handler), poll_seconds=0)
+    res = reconcile(session, client, apply=True)
+    assert all(r.method == "GET" for r in requests)  # only reads: nothing is ever re-executed
+    amounts = {
+        r.description.split(";")[-1].split()[0]: float(r.amount_usd)
+        for r in session.execute(select(ProviderSpend)).scalars()
+    }
+    assert any(e["action"] == "settle" for e in res) and any(
+        "leave" in str(e["action"]) for e in res
+    )
+    rows = {
+        r.description: float(r.amount_usd) for r in session.execute(select(ProviderSpend)).scalars()
+    }
+    assert rows["reconciled:apify_run:RUN9 status=SUCCEEDED"] == pytest.approx(0.0101)
+    assert rows["reserved;apify_run:RUN8"] == 0.05  # unfinished run stays reserved
+    assert amounts  # noqa: S101
+
+
+# ------------------------------------------------------------------ human-reviewed intake
+def _intake(**kw):  # type: ignore[no-untyped-def]
+    base = dict(
+        source_url="https://www.reddit.com/r/example/comments/abc/need_ai_agent_dev/",
+        platform="reddit", channel="direct_buyer", buyer_name="u/startup_founder",
+        requirement="Build an AI agent that triages support tickets",
+        excerpt="We are looking for a developer to build an AI agent that triages our support tickets. Budget around $4,000. DM me.",
+        published_at=NOW - timedelta(days=2), status="open", budget_text="$4,000",
+        contact_route="https://www.reddit.com/user/startup_founder", delivery_suitability="remote OK, small scope",
+    )  # fmt: skip
+    base.update(kw)
+    return base
+
+
+def test_intake_stores_a_separate_unverified_record_with_exactly_what_was_supplied(session) -> None:  # type: ignore[no-untyped-def]
+    from app.models import Evidence, Qualification
+    from app.services.intake import intake_lead
+
+    opp = intake_lead(session, S, "olga", _intake())
+    ev = session.execute(select(Evidence)).scalar_one()
+    assert ev.provider == "manual_intake" and ev.original_text.startswith(
+        "We are looking for a developer"
+    )
+    assert ev.source_url.startswith("https://www.reddit.com/")  # a user-supplied social URL is fine
+    assert opp.verification_status == "unverified" and opp.budget_text == "$4,000"
+    meta = next(
+        q.criteria["intake"]
+        for q in session.execute(select(Qualification)).scalars()
+        if "intake" in q.criteria
+    )
+    assert (
+        meta["by"] == "olga"
+        and meta["platform"] == "reddit"
+        and meta["reviewer_verification"] == "unverified"
+    )
+    assert meta["delivery_suitability"] == "remote OK, small scope"
+    assert opp.triage in (
+        "actionable",
+        "needs_verification",
+    )  # judged by the same rules as automatic leads
+
+
+def test_intake_does_not_fabricate_missing_fields(session) -> None:  # type: ignore[no-untyped-def]
+    from app.services.intake import intake_lead
+
+    opp = intake_lead(
+        session,
+        S,
+        "olga",
+        _intake(
+            buyer_name=None,
+            published_at=None,
+            budget_text=None,
+            contact_route=None,
+            status="unknown",
+        ),
+    )
+    assert opp.budget_text is None and opp.contact_route is None and opp.deadline is None
+    assert opp.triage == "needs_verification"  # no contact route, no status: never actionable
+    assert any(m.startswith("contact_route") for m in opp.assessment["missing"])
+    assert (
+        opp.verification_status == "unverified"
+    )  # undated is flagged, not auto-rejected or invented
+
+
+def test_intake_off_topic_or_hiring_posts_are_rejected_with_a_reason(session) -> None:  # type: ignore[no-untyped-def]
+    from app.services.intake import intake_lead
+
+    opp = intake_lead(
+        session,
+        S,
+        "olga",
+        _intake(
+            requirement="Hiring a full-time accountant",
+            excerpt="We are hiring a full-time accountant for our shop. Apply with your CV today please.",
+        ),
+    )
+    assert opp.triage == "rejected"
+
+
+def test_intake_validates_inputs(session) -> None:  # type: ignore[no-untyped-def]
+    from app.services.intake import IntakeError, intake_lead
+
+    for bad in (
+        _intake(source_url="not a url"),
+        _intake(excerpt="too short"),
+        _intake(platform="upwork"),
+        _intake(channel="x"),
+        _intake(status="maybe"),
+    ):
+        with pytest.raises(IntakeError):
+            intake_lead(session, S, "olga", bad)
+
+
+def test_duplicate_intake_of_the_same_post_is_one_record(session) -> None:  # type: ignore[no-untyped-def]
+    from app.services.intake import intake_lead
+
+    a = intake_lead(session, S, "olga", _intake())
+    b = intake_lead(session, S, "olga", _intake())
+    assert a.id == b.id
+
+
+def test_budget_parsing_handles_separators_and_symbols_without_inventing() -> None:
+    from app.services.triage import _parse_value
+
+    assert _parse_value("$4,000") == (4000.0, "USD")
+    assert _parse_value("€1.278.934,80") == (1278934.8, "EUR")
+    assert _parse_value("1278934.8 EUR") == (1278934.8, "EUR")
+    assert _parse_value("£6,500") == (6500.0, "GBP")
+    assert _parse_value("1278934.8 RON") == (None, "RON")  # not comparable: stays unknown
+    assert _parse_value("budget negotiable") == (None, "")

@@ -74,3 +74,10 @@ describe("applyFilters", () => {
     expect(applyFilters(rows, { ...NO_FILTERS, projectType: "ai_agents" })[0].country).toBe("Germany");
   });
 });
+
+describe("manual intake separation", () => {
+  it("keeps human-supplied records out of the automatic lead lists", () => {
+    const r = (id: string, origin: string) => ({ id, origin, view: "needs_verification", is_mock: false }) as BoardRow;
+    expect(viewRows([r("a", "auto"), r("m", "manual")], "needs_verification").map((x) => x.id)).toEqual(["a"]);
+  });
+});

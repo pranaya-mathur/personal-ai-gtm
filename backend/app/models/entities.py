@@ -384,6 +384,31 @@ class SourceCandidate(Base, IdMixin, TimestampMixin):
     signals: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
+class DiscoveryQueryStat(Base, IdMixin, TimestampMixin):
+    """Effectiveness ledger for intent/search queries. Never promotes a query into evidence."""
+
+    __tablename__ = "discovery_query_stats"
+    __table_args__ = (
+        UniqueConstraint("fingerprint", "provider", name="uq_discovery_query_stats_fp_provider"),
+        Index("ix_discovery_query_stats_channel", "channel"),
+    )
+
+    fingerprint: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    channel: Mapped[str] = mapped_column(String(16), nullable=False)  # agency | buyer
+    query_text: Mapped[str] = mapped_column(String(512), nullable=False)
+    searches: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    urls_retrieved: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pages_ok: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pages_blocked: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    confirmed_active: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    agency_partner_need: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    needs_verification: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    false_positives: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duplicates: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cost_usd: Mapped[float] = mapped_column(Numeric(12, 4), default=0, nullable=False)
+
+
 class ContactRoute(Base, IdMixin, TimestampMixin):
     """A published way to reach a buyer/partner, exactly as the source prints it."""
 

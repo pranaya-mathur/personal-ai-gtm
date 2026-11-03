@@ -31,20 +31,25 @@ class Settings(BaseSettings):
     intent_queries_agency: str = (
         '"looking for" "AI development partner" agency subcontract|'
         '"seeking" "white-label" AI engineering partner agency|'
-        '"we are looking for" subcontractors "machine learning" OR "LLM" agency partner'
+        '"we are looking for" subcontractors "machine learning" OR "LLM" agency partner|'
+        '"looking for" "{facet}" subcontractors OR "delivery partners" agency'
     )
     intent_queries_buyer: str = (
         '"request for proposal" chatbot OR "AI agent" OR "RAG" development|'
         '"looking for" developer to build "AI agent" OR "RAG" OR "document processing" budget|'
-        '"RFP" "generative AI" "proposals due"'
+        '"RFP" "generative AI" "proposals due"|'
+        '"looking for" developer to build "{facet}" project budget -hiring -jobs'
     )
     search_freshness: str = "pm"  # Brave: pd | pw | pm (31 days) | py
     search_max_pages: int = 15  # pages read per run
+    query_plan_max_per_channel: int = 8  # configured + expanded queries per channel per plan
     apify_search_engines: str = "google,bing"  # Apify SERP Actors (billable; gated)
     apify_search_bing_queries: int = 1  # queries per channel sent to Bing (billed per result)
     search_budget_usd: float | None = None  # lifetime cap for the "brave" spend family
     brave_api_key: SecretStr | None = None
     search_discovery_enabled: bool = False  # Brave queries only when explicitly turned on
+    # SAM.gov public Opportunities API (free key from sam.gov Account Details). Off without key.
+    samgov_api_key: SecretStr | None = None
 
     enabled_connectors: str = "mock_opportunities,mock_agencies"
 

@@ -54,7 +54,12 @@ class ApifyActorConnector:
         cap = self._results_cap(query)
         max_charge = min(self.estimate_cost(query).usd, self.settings.spend_limit_per_run_usd)
         client = self._get_client()
-        run = client.run_actor(self.spec.actor_id, self.spec.build_input(query, cap), max_charge)
+        run = client.run_actor(
+            self.spec.actor_id,
+            self.spec.build_input(query, cap),
+            max_charge,
+            getattr(self, "on_run_submitted", None),
+        )
         items = client.dataset_items(run["defaultDatasetId"], cap)
         findings: list[RawFinding] = []
         skipped = 0

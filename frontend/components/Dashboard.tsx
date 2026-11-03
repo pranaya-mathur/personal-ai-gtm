@@ -3,20 +3,22 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   api, splitReal,
-  runProgress, type AiStatus, type AiUsage, type Connector, type Draft, type Evidence, type Metrics,
+  runProgress, type AiStatus, type AiUsage, type Connector, type Deal, type Draft, type Evidence, type Metrics,
   type BoardRow, type CostSummary, type Filters, NO_FILTERS, applyFilters, type Profile, type Run, type RouteRow, type SourcePerformance,
 } from "@/lib/api";
-import { ContactsView, CostPanel, FilterBar, OperationsView, RecordsView, ResearchDetail, SourcesView, SpendView } from "./Views";
+import { ContactsView, CostPanel, EngagementView, FilterBar, IntakeView, OperationsView, RecordsView, ResearchDetail, SourcesView, SpendView } from "./Views";
 
 type Tab =
   | "overview" | "projects" | "agencies" | "partners" | "verify" | "contacts"
-  | "sources" | "spend" | "rejected" | "operations" | "research";
+  | "sources" | "spend" | "rejected" | "operations" | "research" | "intake" | "pipeline";
 const TABS: [Tab, string][] = [
   ["overview", "Overview"], ["projects", "Active AI implementation opportunities"],
   ["agencies", "Agencies seeking delivery partners"], ["partners", "Verified & potential agency partners"],
   ["verify", "Relevant, needs verification"], ["contacts", "Contact routes & next actions"],
+  ["pipeline", "Engagement pipeline"],
   ["sources", "Discovery sources"], ["spend", "OpenAI & provider spend"],
-  ["rejected", "Rejected / unqualified"], ["operations", "Discovery operations"], ["research", "Research detail"],
+  ["rejected", "Rejected / unqualified"], ["intake", "Manual intake"],
+  ["operations", "Discovery operations"], ["research", "Research detail"],
 ];
 const FILTERED: Tab[] = ["projects", "agencies", "partners", "verify", "rejected"];
 
@@ -40,15 +42,16 @@ export default function Dashboard() {
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [routes, setRoutes] = useState<RouteRow[]>([]);
   const [sources, setSources] = useState<SourcePerformance | null>(null);
+  const [deals, setDeals] = useState<Deal[]>([]);
 
   const load = useCallback(async () => {
     try {
-      const [m, o, r, d, e, c, p, ai, au, b, co, ro, so] = await Promise.all([
+      const [m, o, r, d, e, c, p, ai, au, b, co, ro, so, dl] = await Promise.all([
         api.metrics(), api.opportunities(), api.runs(), api.drafts(),
         api.evidence(), api.connectors(), api.profiles(), api.aiStatus(), api.aiUsage(),
-        api.board(), api.costs(), api.routes(), api.sources(),
+        api.board(), api.costs(), api.routes(), api.sources(), api.deals(),
       ]);
-      setBoard(b); setCosts(co); setRoutes(ro); setSources(so); setLoaded(true);
+      setBoard(b); setCosts(co); setRoutes(ro); setSources(so); setDeals(dl); setLoaded(true);
       setMetrics(m); setOpps(o); setRuns(r); setDrafts(d);
       setEvidence(e); setConnectors(c); setProfiles(p); setAiStatus(ai); setAiUsage(au); setError(null);
     } catch (e) {
@@ -62,9 +65,10 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [load]);
 
-  const shown = applyFilters(board, filters);
+  const autoBoard = board.filter((r) => r.origin !== "manual");
+  const shown = applyFilters(autoBoard, filters);
   const open = (id: string) => { setSelected(id); setTab("research"); };
-  const { real } = splitReal(board);
+  const { real } = splitReal(autoBoard);
   const realCount = real.length;
   const count = (v: BoardRow["view"]) => real.filter((r) => r.view === v).length;
   const confirmed = count("active_project");
@@ -115,6 +119,8 @@ export default function Dashboard() {
       {tab === "rejected" && <RecordsView rows={shown} view={["rejected", "unqualified_signal"]} onOpen={open}
         title="Rejected and unqualified records"
         blurb="Kept for audit with the reason (not relevant, closed, awarded, or a signal that states no need). Evidence is preserved." />}
+      {tab === "intake" && <IntakeView rows={board} onOpen={open} onSaved={() => void load()} />}
+      {tab === "pipeline" && <EngagementView deals={deals} board={board} onOpen={open} onRefresh={() => void load()} />}
       {tab === "contacts" && <ContactsView routes={routes} onOpen={open} />}
       {tab === "sources" && <SourcesView data={sources} />}
       {tab === "spend" && <SpendView costs={costs} usage={aiUsage} />}
@@ -130,6 +136,7 @@ export default function Dashboard() {
         <div className="card stat"><span className="muted">Agencies seeking partners (unconfirmed)</span><b>{agenciesSeeking}</b></div>
         <div className="card stat"><span className="muted">Verified delivery partnerships</span><b>{partners}</b></div>
         <div className="card stat"><span className="muted">Relevant, needs verification</span><b>{pending}</b></div>
+        <div className="card stat"><span className="muted">Deals in pipeline</span><b>{deals.length}</b></div>
       </section>
       <section className="grid cols3"><CostPanel costs={costs} /></section>
       {board.length > 0 && realCount === 0 && (

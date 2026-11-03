@@ -1,35 +1,14 @@
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.models import Opportunity, Qualification
-from app.models.enums import OpportunityCategory, VerificationStatus
+from app.models.enums import VerificationStatus
+from app.services.ranking import score_opportunity
 from app.services.triage import AiSignal, apply_assessment, assess_opportunity
-
-CATEGORY_WEIGHT = {
-    OpportunityCategory.CONFIRMED_DEMAND: 1.0,
-    OpportunityCategory.VERIFIED_PARTNERSHIP: 0.7,
-    OpportunityCategory.SPECULATIVE_PROSPECT: 0.3,
-}
-
-
-def score_opportunity(
-    category: str, confidence: float, research: dict[str, object]
-) -> tuple[float, dict[str, float]]:
-    """Transparent ranking rubric (0-100). It ORDERS records; it never decides qualification."""
-    criteria = {
-        "category_weight": CATEGORY_WEIGHT[OpportunityCategory(category)] * 40,
-        "source_confidence": confidence * 25,
-        "freshness": 15.0 if research.get("all_fresh") else 0.0,
-        "source_confirmed": 5.0 if research.get("source_confirmed") else 0.0,
-        "dated_and_sourced": 10.0
-        if research.get("has_publication_date") and research.get("has_source_url")
-        else 0.0,
-        "known_contact": 5.0 if int(research.get("known_contacts", 0) or 0) > 0 else 0.0,  # type: ignore[call-overload]
-    }
-    return round(sum(criteria.values()), 1), criteria
 
 
 class QualificationAgent:
@@ -66,7 +45,24 @@ class QualificationAgent:
             assessment = assess_opportunity(self.session, opp, self.settings, signal)
             previous = apply_assessment(opp, assessment)
 
-            det_score, det_criteria = score_opportunity(opp.category, opp.confidence, rep)
+            research_flags = dict(rep)
+            research_flags["has_contact_route"] = bool(opp.contact_route)
+            age_days = None
+            if opp.first_seen_at:
+                seen = opp.first_seen_at
+                if seen.tzinfo is None:
+                    seen = seen.replace(tzinfo=UTC)
+                age_days = (datetime.now(UTC) - seen).days
+            deal_size = (assessment.criteria.get("deal_size") or {}).get("result")
+            det_score, det_criteria = score_opportunity(
+                channel=opp.channel,
+                category=opp.category,
+                triage=str(assessment.triage),
+                confidence=opp.confidence,
+                research=research_flags,
+                deal_size_result=deal_size,
+                age_days=age_days,
+            )
             score: float = det_score
             criteria: dict[str, Any] = dict(det_criteria)
             if usable and opp.verification_status != VerificationStatus.STALE:
@@ -86,7 +82,7 @@ class QualificationAgent:
                 f"{assessment.triage}: "
                 + "; ".join(assessment.reasons)
                 + (f" | missing: {'; '.join(assessment.missing)}" if assessment.missing else "")
-                + f" | rank score {score}"
+                + f" | rank score {score} ({criteria.get('rubric')})"
             )
             self.session.add(
                 Qualification(

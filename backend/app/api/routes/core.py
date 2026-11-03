@@ -42,9 +42,14 @@ from app.schemas.api import (
     BoardRow,
     BudgetLine,
     CostSummary,
+    DealCreate,
+    DealOut,
+    DealUpdate,
     DraftOut,
     DraftUpdate,
     EvidenceOut,
+    IntakeIn,
+    InteractionCreate,
     OpportunityDetail,
     OpportunityOut,
     ProfileCreate,
@@ -54,7 +59,14 @@ from app.schemas.api import (
     RunCreate,
     RunOut,
 )
+from app.services.commercial_class import LABELS as COMMERCIAL_LABELS
+from app.services.commercial_class import commercial_class
+from app.services.engagement import EngagementError, add_interaction, get_or_create_deal
+from app.services.engagement import list_deals as engagement_list
+from app.services.engagement import mark_draft_sent, update_deal
+from app.services.intake import IntakeError, intake_lead
 from app.services.project_type import project_type as project_type_of
+from app.services.query_strategy import effectiveness_report
 from app.services.triage import _parse_value
 from app.utils import utcnow
 
@@ -81,6 +93,15 @@ _FREE_NOTES = {
     "public_announcement_feeds": "Free. RSS/Atom feeds listed in AGENCY_FEED_URLS.",
     "wikidata_agencies": "Free open registry (CC0). Produces POTENTIAL partners only: existence, "
     "not demand.",
+    "ted_api": "Free official EU TED v3 API. High volume; many notices fail small-team deal fit.",
+    "worldbank_api": "Free World Bank procurement notices. Often large/complex vs preferred deal size.",
+    "uk_contracts_finder": "Free UK Contracts Finder OCDS API.",
+    "uk_find_a_tender": "Free UK Find a Tender OCDS API.",
+    "canadabuys": "Free CanadaBuys open-data CSV of open tender notices.",
+    "hn_freelancer_threads": "Free HN Algolia API; SEEKING FREELANCER comments only.",
+    "sam_gov": "Free official SAM.gov Opportunities API. Requires SAMGOV_API_KEY. Off without key.",
+    "intent_search": "Brave Search intent queries (billable). Off unless SEARCH_DISCOVERY_ENABLED.",
+    "apify_intent_search": "Apify SERP intent search (billable). Off unless APIFY_PAID_EXECUTION_APPROVED.",
 }
 
 
@@ -91,6 +112,16 @@ def _usable(name: str, spec: object | None, settings: object) -> bool:
         return bool(settings.agency_seed_list)  # type: ignore[attr-defined]
     if name == "public_announcement_feeds":
         return bool(settings.agency_feed_list)  # type: ignore[attr-defined]
+    if name == "sam_gov":
+        key = getattr(settings, "samgov_api_key", None)
+        return bool(key and key.get_secret_value())
+    if name in ("intent_search",):
+        return bool(
+            getattr(settings, "search_discovery_enabled", False)
+            and getattr(settings, "brave_api_key", None)
+        )
+    if name == "apify_intent_search":
+        return bool(getattr(settings, "apify_paid_execution_approved", False))
     return True
 
 
@@ -521,6 +552,16 @@ def board(
                 select(ContactRoute).where(ContactRoute.opportunity_id == opp.id)
             ).scalars()
         ]
+        intake_meta = next(
+            (
+                q.criteria["intake"]
+                for q in db.execute(
+                    select(Qualification).where(Qualification.opportunity_id == opp.id)
+                ).scalars()
+                if isinstance(q.criteria, dict) and "intake" in q.criteria
+            ),
+            None,
+        )
         score = qual.score if qual else None
         is_mock = bool(evs) and all(e.provider.startswith("mock") for e in evs)
         row = BoardRow(
@@ -565,6 +606,11 @@ def board(
             ai_next_action=dossier.get("suggested_next_action"),
             small_team_fit=dossier.get("small_team_fit"),
             external_delivery=dossier.get("external_delivery"),
+            origin="manual" if evs and all(e.provider == "manual_intake" for e in evs) else "auto",
+            intake=intake_meta,
+            commercial_class=commercial_class(
+                category=opp.category, triage=opp.triage, channel=opp.channel
+            ),
         )
         if is_mock and not include_mock:
             continue
@@ -782,3 +828,91 @@ def costs(db: Session = Depends(get_db)) -> CostSummary:
             "provider consoles."
         ),
     )
+
+
+@router.post("/intake", response_model=BoardRow, status_code=201, dependencies=[OPERATOR])
+def create_intake(
+    body: IntakeIn, who: Identity = OPERATOR, db: Session = Depends(get_db)
+) -> BoardRow:
+    """Add one human-reviewed lead. Stored separately (origin=manual); nothing is fetched."""
+    try:
+        opp = intake_lead(db, get_settings(), who.name, body.model_dump())
+    except IntakeError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    db.commit()
+    return next(r for r in board(include_mock=True, db=db) if r.id == opp.id)
+
+
+@router.get("/queries/performance")
+def query_performance(db: Session = Depends(get_db)) -> dict[str, object]:
+    """Effectiveness of intent-search queries. Empty until a gated search provider has run."""
+    return {"queries": effectiveness_report(db), "commercial_class_labels": COMMERCIAL_LABELS}
+
+
+@router.get("/deals", response_model=list[DealOut])
+def deals(
+    follow_ups: bool = False, db: Session = Depends(get_db)
+) -> list[dict[str, object]]:
+    return engagement_list(db, follow_ups_only=follow_ups)
+
+
+@router.post("/deals", response_model=DealOut, status_code=201, dependencies=[OPERATOR])
+def create_deal(body: DealCreate, db: Session = Depends(get_db)) -> dict[str, object]:
+    try:
+        deal = get_or_create_deal(db, body.opportunity_id)
+    except EngagementError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    db.commit()
+    return next(d for d in engagement_list(db) if d["id"] == deal.id)
+
+
+@router.patch("/deals/{deal_id}", response_model=DealOut, dependencies=[OPERATOR])
+def patch_deal(
+    deal_id: uuid.UUID, body: DealUpdate, db: Session = Depends(get_db)
+) -> dict[str, object]:
+    try:
+        update_deal(
+            db,
+            deal_id,
+            stage=body.stage,
+            value_usd=body.value_usd,
+            notes=body.notes,
+            next_follow_up_at=body.next_follow_up_at,
+            clear_follow_up=body.clear_follow_up,
+        )
+    except EngagementError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    db.commit()
+    return next(d for d in engagement_list(db) if d["id"] == deal_id)
+
+
+@router.post(
+    "/deals/{deal_id}/interactions",
+    response_model=DealOut,
+    status_code=201,
+    dependencies=[OPERATOR],
+)
+def create_interaction(
+    deal_id: uuid.UUID, body: InteractionCreate, db: Session = Depends(get_db)
+) -> dict[str, object]:
+    try:
+        add_interaction(
+            db, deal_id, kind=body.kind, summary=body.summary, occurred_at=body.occurred_at
+        )
+    except EngagementError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    db.commit()
+    return next(d for d in engagement_list(db) if d["id"] == deal_id)
+
+
+@router.post("/drafts/{draft_id}/mark-sent", response_model=DraftOut, dependencies=[OPERATOR])
+def draft_mark_sent(
+    draft_id: uuid.UUID, who: Identity = OPERATOR, db: Session = Depends(get_db)
+) -> OutreachDraft:
+    """Record that you manually sent an approved draft. Does not transmit anything."""
+    try:
+        draft = mark_draft_sent(db, draft_id, who.name)
+    except EngagementError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    db.commit()
+    return draft

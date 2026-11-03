@@ -1,4 +1,5 @@
 import uuid
+from collections.abc import Callable
 
 from sqlalchemy.orm import Session
 from tenacity import (
@@ -15,11 +16,12 @@ from app.connectors.base import (
     DiscoveryConnector,
     DiscoveryQuery,
     DiscoveryResult,
+    ProviderRunPending,
     SignalKind,
 )
 from app.core.logging import get_logger
 from app.services.ingest import ingest_finding, validate_finding
-from app.services.spend import SpendGuard, SpendLimitExceeded
+from app.services.spend import Reservation, SpendGuard, SpendLimitExceeded
 
 log = get_logger(__name__)
 
@@ -56,6 +58,10 @@ class _DiscoveryAgent:
         self.cache = cache if cache is not None else {}
         self.connectors = [c for c in connectors if c.kinds & self.kinds]
 
+    def _recorder(self, reservation: Reservation) -> Callable[[str], None]:
+        """Callback that stores the provider run id on the reserved ledger row."""
+        return lambda rid: self.spend.annotate(reservation, f"apify_run:{rid}")
+
     def _call(
         self, connector: DiscoveryConnector, query: DiscoveryQuery, run_id: uuid.UUID | None
     ) -> DiscoveryResult:
@@ -65,7 +71,7 @@ class _DiscoveryAgent:
             return self.cache[connector.name]
         for attempt in Retrying(
             retry=retry_if_exception_type(ConnectorError)
-            & retry_if_not_exception_type(ConnectorRejected),
+            & retry_if_not_exception_type((ConnectorRejected, ProviderRunPending)),
             # a billable provider run is never re-submitted after a transport error: the first
             # run may still be executing (and billed) on the provider's side
             stop=stop_after_attempt(getattr(connector, "max_attempts", 3)),
@@ -87,6 +93,8 @@ class _DiscoveryAgent:
                     reservation = self.spend.reserve(est, run_id, family, ledger_name, "discovery")
                 else:
                     self.spend.check(0.0, run_id, family)
+                if reservation is not None:
+                    connector.on_run_submitted = self._recorder(reservation)  # type: ignore[attr-defined]
                 try:
                     result = connector.discover(query)
                 except ConnectorRejected:

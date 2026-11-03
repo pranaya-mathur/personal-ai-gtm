@@ -124,6 +124,21 @@ class AnalysisOut(ORM):
     created_at: datetime
 
 
+class IntakeIn(BaseModel):
+    source_url: str = Field(max_length=2048)
+    platform: str = "other"
+    channel: str = "direct_buyer"
+    buyer_name: str | None = Field(default=None, max_length=256)
+    requirement: str = Field(max_length=500)
+    excerpt: str = Field(max_length=4000)  # verbatim text the reviewer is permitted to copy
+    published_at: datetime | None = None
+    status: str = "unknown"
+    deadline: datetime | None = None
+    budget_text: str | None = Field(default=None, max_length=256)
+    contact_route: str | None = Field(default=None, max_length=2048)
+    delivery_suitability: str | None = Field(default=None, max_length=1000)
+
+
 class RouteOut(BaseModel):
     kind: str
     value: str
@@ -176,6 +191,46 @@ class BoardRow(BaseModel):
     ai_next_action: str | None
     small_team_fit: str | None
     external_delivery: str | None
+    origin: str  # auto | manual (human-supplied intake)
+    intake: dict[str, Any] | None
+    commercial_class: str  # one of the six commercial-intent classes
+
+
+class DealCreate(BaseModel):
+    opportunity_id: uuid.UUID
+
+
+class DealUpdate(BaseModel):
+    stage: str | None = None
+    value_usd: float | None = None
+    notes: str | None = None
+    next_follow_up_at: datetime | None = None
+    clear_follow_up: bool = False
+
+
+class InteractionCreate(BaseModel):
+    kind: str
+    summary: str = Field(max_length=4000)
+    occurred_at: datetime | None = None
+
+
+class InteractionOut(BaseModel):
+    id: uuid.UUID
+    kind: str
+    summary: str
+    occurred_at: datetime
+
+
+class DealOut(BaseModel):
+    id: uuid.UUID
+    opportunity_id: uuid.UUID
+    opportunity_title: str | None
+    stage: str
+    value_usd: float | None
+    notes: str | None
+    next_follow_up_at: datetime | None
+    updated_at: datetime
+    interactions: list[InteractionOut] = []
 
 
 class BudgetLine(BaseModel):

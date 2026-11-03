@@ -306,3 +306,30 @@ def test_concurrent_workers_cannot_both_reserve_the_last_budget(pg_url, client) 
     [t.start() for t in ts]
     [t.join() for t in ts]
     assert sorted(results) == ["blocked", "ok"]  # 0.30 + 0.30 > 0.50: exactly one wins
+
+
+def test_intake_endpoint_roles_validation_and_separation(client) -> None:  # type: ignore[no-untyped-def]
+    body = {
+        "source_url": "https://www.reddit.com/r/x/comments/1/need_ai/", "platform": "reddit",
+        "requirement": "Build an AI agent for ticket triage",
+        "excerpt": "We are looking for a developer to build an AI agent that triages support tickets. Budget $4,000.",  # noqa: E501
+        "status": "open", "budget_text": "$4,000", "contact_route": "https://www.reddit.com/user/x",
+    }  # fmt: skip
+    assert client.post("/intake", json=body, headers=_as(client, VIEWER)).status_code == 403
+    assert (
+        client.post(
+            "/intake", json={**body, "excerpt": "short"}, headers=_as(client, OPERATOR)
+        ).status_code
+        == 422
+    )
+    ok = client.post("/intake", json=body, headers=_as(client, OPERATOR))
+    assert ok.status_code == 201
+    row = ok.json()
+    assert (
+        row["origin"] == "manual"
+        and row["intake"]["by"] == "olga"
+        and row["budget_value"] == 4000.0
+    )
+    assert row["verification_status"] == "unverified"
+    auto = [r for r in client.get("/board").json() if r["origin"] == "auto"]
+    assert row["id"] not in {r["id"] for r in auto}  # separate from automatic discovery
