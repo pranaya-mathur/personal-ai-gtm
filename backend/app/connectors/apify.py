@@ -18,6 +18,7 @@ class ApifyActorConnector:
     a spec marked reviewed, APIFY_TOKEN, and APIFY_PAID_EXECUTION_APPROVED=true."""
 
     is_mock = False
+    max_attempts = 1  # billable runs are not retried
 
     def __init__(
         self, spec: ActorSpec, settings: Settings, client: ApifyClient | None = None

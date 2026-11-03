@@ -66,7 +66,9 @@ class _DiscoveryAgent:
         for attempt in Retrying(
             retry=retry_if_exception_type(ConnectorError)
             & retry_if_not_exception_type(ConnectorRejected),
-            stop=stop_after_attempt(3),
+            # a billable provider run is never re-submitted after a transport error: the first
+            # run may still be executing (and billed) on the provider's side
+            stop=stop_after_attempt(getattr(connector, "max_attempts", 3)),
             wait=wait_exponential(multiplier=0.5, max=8),
             reraise=True,
         ):

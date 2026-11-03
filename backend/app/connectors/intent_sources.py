@@ -276,6 +276,7 @@ class ApifySearchIntentConnector(SearchIntentConnector):
 
     name = "apify_intent_search"
     spend_family = "apify"
+    max_attempts = 1  # billable runs are not retried
 
     def __init__(
         self, settings: Settings, client: Any = None, checker: SourceChecker | None = None

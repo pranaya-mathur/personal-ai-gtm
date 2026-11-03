@@ -963,3 +963,30 @@ def test_a_manual_rejection_survives_every_later_reassessment(session) -> None: 
         and o.status == "disqualified"
         and o.rejection_reason == "marketing_content"
     )
+
+
+def test_billable_connector_is_called_once_even_when_it_fails(session) -> None:  # type: ignore[no-untyped-def]
+    from app.agents.discovery import OpportunityIntelligenceAgent
+    from app.connectors.base import CostEstimate
+    from app.connectors.intent_sources import ApifySearchIntentConnector
+    from app.services.spend import SpendGuard
+
+    calls = {"n": 0}
+
+    class Paid:
+        name, is_mock, max_attempts = "apify_paid", False, 1
+        kinds = frozenset({SignalKind.PROJECT_REQUEST})
+
+        def estimate_cost(self, q):  # type: ignore[no-untyped-def]
+            return CostEstimate(usd=0.02)
+
+        def discover(self, q):  # type: ignore[no-untyped-def]
+            calls["n"] += 1
+            raise ConnectorError("Apify transport error: ReadTimeout")
+
+    s = Settings(database_url="sqlite://", apify_test_budget_usd=0.25)
+    out = OpportunityIntelligenceAgent(session, [Paid()], SpendGuard(session, s)).run(
+        DiscoveryQuery(), None
+    )  # type: ignore[list-item]
+    assert calls["n"] == 1 and out["errors"]  # no silent re-submission of a paid run
+    assert ApifySearchIntentConnector.max_attempts == 1
