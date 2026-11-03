@@ -164,3 +164,51 @@ def test_run_timeout_is_terminal(session) -> None:  # type: ignore[no-untyped-de
     time.sleep(0.01)
     run = execute_run(session, run.id, build_connectors(["mock_opportunities"]), s)
     assert run.status == RunStatus.FAILED and "exceeded" in (run.error or "")
+
+
+def test_generic_it_procurement_is_not_qualified_as_ai(session, settings) -> None:  # type: ignore[no-untyped-def]
+    from app.agents.qualification import QualificationAgent
+    from app.connectors.base import RawFinding
+    from app.models import Opportunity
+    from app.services.ingest import ingest_finding
+    from app.utils import utcnow
+
+    def add(title: str, text: str) -> str:
+        f = RawFinding(
+            kind=SignalKind.PROJECT_REQUEST,
+            title=title,
+            source_url="https://example.org/" + title[:5],
+            original_text=text,
+            organization_name="Org " + title[:5],
+            provider_confidence=0.9,
+            published_at=utcnow(),
+        )
+        return str(ingest_finding(session, f, "t", None, 90).opportunity_id)
+
+    ai = add("RAG assistant", "We need a generative AI assistant with retrieval.")
+    erp = add("ERP upkeep", "Maintenance of accounting software modules.")
+    research = {
+        k: {"all_fresh": True, "has_publication_date": True, "has_source_url": True}
+        for k in (ai, erp)
+    }
+    QualificationAgent(session, settings=settings).run(research)
+    status = {str(o.id): o.status for o in session.query(Opportunity)}
+    assert status[ai] == "qualified" and status[erp] == "new"
+
+
+def test_truncated_openai_json_becomes_audited_refusal() -> None:
+    import pytest
+    from pydantic import SecretStr
+
+    from app.llm.base import LLMRefusalError
+    from app.llm.openai_client import OpenAILLM
+
+    class Boom:
+        class responses:  # noqa: N801
+            @staticmethod
+            def parse(**kw):  # type: ignore[no-untyped-def]
+                S.ResearchBrief.model_validate_json('{"findings":[{"text":"Di')
+
+    llm = OpenAILLM(SecretStr("k"), "gpt-5.4-mini", True, client=Boom())
+    with pytest.raises(LLMRefusalError, match="not valid JSON"):
+        llm.complete_structured("s", "u", S.ResearchBrief, 100)

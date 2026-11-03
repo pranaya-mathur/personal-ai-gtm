@@ -120,7 +120,7 @@ def build_graph(
 
     def qualification(state: WorkflowState) -> dict[str, Any]:
         agent = QualificationAgent(
-            session, tasks, state.get("ai_results", {}), uuid.UUID(state["run_id"])
+            session, tasks, state.get("ai_results", {}), uuid.UUID(state["run_id"]), settings
         )
         return {"qualified": agent.run(state.get("research", {}))}
 

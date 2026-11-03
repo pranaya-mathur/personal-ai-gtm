@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     llm_retry_base_seconds: float = 0.5
     llm_spend_limit_per_run_usd: float = 0.50
     ai_max_opportunities_per_run: int = 10
+    # Qualification requires the evidence to mention at least one of these (whole words). Keeps
+    # generic IT/software procurement from qualifying as an AI project.
+    topic_terms: str = (
+        "ai,artificial intelligence,machine learning,generative,llm,large language,rag,"
+        "retrieval,chatbot,neural,nlp,agentic,computer vision,deep learning"
+    )
 
     # Controlled-test lifetime caps per provider family (None = no test cap). Enforced before each
     # call against the shared spend ledger, including estimated in-flight cost of the next call.
@@ -60,6 +66,10 @@ class Settings(BaseSettings):
 
     worker_poll_interval_seconds: float = 2.0
     worker_max_attempts: int = 3
+
+    @property
+    def topic_term_list(self) -> list[str]:
+        return [t.strip().lower() for t in self.topic_terms.split(",") if t.strip()]
 
     def model_for(self, task: str) -> str:
         """Model for an AI task; falls back to OPENAI_MODEL when no override is configured."""

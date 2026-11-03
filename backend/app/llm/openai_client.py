@@ -9,7 +9,7 @@ with `.output_parsed`, `.status`, `.usage.input_tokens/.output_tokens`; a refusa
 from typing import Any
 
 import openai
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from app.llm.base import (
     LLMDisabledError,
@@ -85,6 +85,8 @@ class OpenAILLM:
             raise LLMRefusalError(f"OpenAI API error {exc.status_code}") from exc
         except (openai.LengthFinishReasonError, openai.ContentFilterFinishReasonError) as exc:
             raise LLMRefusalError(type(exc).__name__) from exc
+        except ValidationError as exc:  # output cut off mid-JSON or not matching the schema
+            raise LLMRefusalError("output was not valid JSON for the schema (truncated?)") from exc
 
         if getattr(resp, "status", "completed") == "incomplete":
             raise LLMRefusalError("response incomplete (max_output_tokens reached)")

@@ -1,10 +1,13 @@
+import re
 import uuid
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.tasks import AITasks
-from app.models import Opportunity, Qualification
+from app.core.config import Settings, get_settings
+from app.models import Evidence, Opportunity, OpportunityEvidence, Qualification
 from app.models.enums import OpportunityCategory, OpportunityStatus, VerificationStatus
 from app.services.spend import SpendLimitExceeded
 
@@ -42,9 +45,22 @@ class QualificationAgent:
         tasks: AITasks | None = None,
         ai_results: dict[str, dict[str, Any]] | None = None,
         run_id: uuid.UUID | None = None,
+        settings: Settings | None = None,
     ) -> None:
+        self.settings = settings or get_settings()
         self.session, self.tasks = session, tasks
         self.ai_results, self.run_id = ai_results or {}, run_id
+
+    def _on_topic(self, opp: Opportunity) -> bool:
+        texts = self.session.execute(
+            select(Evidence.original_text)
+            .join(OpportunityEvidence, OpportunityEvidence.evidence_id == Evidence.id)
+            .where(OpportunityEvidence.opportunity_id == opp.id)
+        ).scalars()
+        blob = " ".join([opp.title, *texts]).lower()
+        return any(
+            re.search(rf"(?<!\w){re.escape(t)}(?!\w)", blob) for t in self.settings.topic_term_list
+        )
 
     def run(self, research: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
         out: dict[str, dict[str, object]] = {}
@@ -52,6 +68,7 @@ class QualificationAgent:
             opp = self.session.get(Opportunity, uuid.UUID(oid))
             if opp is None:
                 continue
+            on_topic = self._on_topic(opp)
             det_score, det_criteria = score_opportunity(opp.category, opp.confidence, rep)
             score: float = det_score
             criteria: dict[str, Any] = dict(det_criteria)
@@ -81,6 +98,7 @@ class QualificationAgent:
                         }
                         for c in assessment.criteria
                     ]
+            criteria["on_topic"] = on_topic
             numeric = ", ".join(
                 f"{k}={v:g}" for k, v in criteria.items() if isinstance(v, int | float)
             )
@@ -92,6 +110,7 @@ class QualificationAgent:
                     if ai_unsupported
                     else ""
                 )
+                + ("" if on_topic else "; evidence does not mention any AI topic term")
                 + note
             )
             self.session.add(
@@ -102,7 +121,7 @@ class QualificationAgent:
             if opp.status == OpportunityStatus.NEW:
                 if stale:
                     opp.status = OpportunityStatus.DISQUALIFIED
-                elif score >= QUALIFY_THRESHOLD and not ai_unsupported:
+                elif score >= QUALIFY_THRESHOLD and not ai_unsupported and on_topic:
                     opp.status = OpportunityStatus.QUALIFIED
             out[oid] = {"score": score, "status": opp.status}
         self.session.flush()
