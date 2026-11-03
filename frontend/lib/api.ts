@@ -13,14 +13,50 @@ export interface Opportunity {
   last_seen_at: string;
 }
 
+export interface RunOutcome {
+  outcome: "succeeded" | "no_matching_records" | "partial" | "failed" | "cancelled";
+  detail: string;
+  sources_ran: number;
+  sources_failed: string[];
+  sources_skipped: string[];
+  retrieved: number;
+  new_records: number;
+  pursuable_after_triage: number;
+}
+
 export interface Run {
   id: string;
   kind: string;
   status: string;
+  outcome?: string | null;
+  trigger?: string | null;
   attempts: number;
   error: string | null;
   created_at: string;
-  state: { completed_nodes?: string[]; errors?: string[]; connector_stats?: ConnectorStat[] };
+  state: { completed_nodes?: string[]; errors?: string[]; connector_stats?: ConnectorStat[]; outcome?: RunOutcome };
+}
+
+/** Truthful run label: "completed" never implies that anything useful was found. */
+export function outcomeLabel(r: Run): string {
+  if (r.status === "queued") return "Queued";
+  if (r.status === "running") return "Running";
+  switch (r.outcome) {
+    case "succeeded": return "Succeeded — records retrieved";
+    case "no_matching_records": return "Succeeded — no matching records";
+    case "partial": return "Partially succeeded — some sources failed";
+    case "failed": return "Failed";
+    case "cancelled": return "Cancelled";
+    default: return r.status === "failed" ? "Failed" : r.status === "cancelled" ? "Cancelled" : "Finished (outcome not recorded)";
+  }
+}
+
+/** The discovery button names what will really run: it must never say "mock" when live sources are on. */
+export function discoveryButtonLabel(connectors: { name: string; enabled: boolean; is_mock: boolean; usable: boolean; paid: boolean }[]): string {
+  const on = connectors.filter((c) => c.enabled);
+  const live = on.filter((c) => !c.is_mock && c.usable);
+  const paid = live.filter((c) => c.paid);
+  if (live.length === 0) return on.length ? "Run discovery (mock fixtures only — no live source enabled)" : "Run discovery (no source enabled)";
+  return `Run discovery (${live.length} live source${live.length === 1 ? "" : "s"}${paid.length ? `, ${paid.length} PAID` : ", free"})`;
 }
 
 export interface ConnectorStat {
@@ -267,7 +303,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
     cache: "no-store",
-    headers: { "content-type": "application/json", ...init?.headers },
+    headers: { "content-type": "application/json", "x-gtm-action": "1", ...init?.headers },
   });
   if (!res.ok) throw new Error(`${path} -> ${res.status}`);
   return (await res.json()) as T;
@@ -314,6 +350,25 @@ export const api = {
     }),
   markDraftSent: (id: string) =>
     request<Draft>(`/drafts/${id}/mark-sent`, { method: "POST" }),
+  verify: (id: string, attest: string[], note?: string) =>
+    request<Opportunity>(`/opportunities/${id}/verify`, { method: "POST", body: JSON.stringify({ attest, note }) }),
+  allDrafts: () => request<Draft[]>("/drafts"),
+  editDraft: (id: string, body: { subject?: string; body: string }) =>
+    request<Draft>(`/drafts/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  approveDraft: (id: string) => request<Draft>(`/drafts/${id}/approve`, { method: "POST" }),
+  rejectDraft: (id: string) => request<Draft>(`/drafts/${id}/reject`, { method: "POST" }),
+  editProposal: (id: string, body: { body?: string; price_text?: string }) =>
+    request<ProposalRow>(`/proposals/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  approveProposal: (id: string) => request<ProposalRow>(`/proposals/${id}/approve`, { method: "POST" }),
+  proposalSent: (id: string) => request<ProposalRow>(`/proposals/${id}/mark-sent`, { method: "POST" }),
+  onboarding: (dealId: string) => request<OnboardingItem[]>(`/deals/${dealId}/onboarding`),
+  startOnboarding: (dealId: string) => request<OnboardingItem[]>(`/deals/${dealId}/onboarding`, { method: "POST" }),
+  tickOnboarding: (id: string, done: boolean) =>
+    request<OnboardingItem>(`/onboarding/${id}`, { method: "PATCH", body: JSON.stringify({ done }) }),
+  schedules: () => request<SchedulesResponse>("/schedules"),
+  patchSchedule: (connector: string, body: Partial<{ enabled: boolean; interval_minutes: number }>) =>
+    request<ScheduleRow>(`/schedules/${connector}`, { method: "PATCH", body: JSON.stringify(body) }),
+  reviewQueue: () => request<ReviewItem[]>("/review-queue"),
   queryPerformance: () =>
     request<{ queries: { query: string; channel: string; useful: number; cost_usd: number }[] }>("/queries/performance"),
 };
@@ -380,3 +435,16 @@ export const STAGE_LABEL: Record<string, string> = {
   responded: "Responded", meeting: "Meeting", proposal: "Proposal", negotiation: "Negotiation",
   won: "Won", onboarding: "Onboarding", lost: "Lost", rejected: "Rejected",
 };
+
+export interface OnboardingItem { id: string; label: string; done: boolean; done_by: string | null; done_at: string | null }
+export interface ScheduleRow {
+  connector: string; channel: string; enabled: boolean; paid: boolean; interval_minutes: number;
+  next_run_at: string | null; last_success_at: string | null; last_status: string | null;
+  last_error: string | null; consecutive_failures: number; last_retrieved: number; last_new: number;
+  freshness: "ok" | "stale" | "never_succeeded" | "failing" | "disabled";
+}
+export interface SchedulesResponse { scheduler_enabled: boolean; paid_scheduling_allowed: boolean; sources: ScheduleRow[] }
+export interface ReviewItem {
+  opportunity_id: string; title: string; channel: string; pursuability: string; commercial_class: string;
+  first_seen_at: string; missing: string[]; next_action: string | null; sources: string[];
+}

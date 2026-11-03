@@ -2,15 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  api, splitReal,
+  api, splitReal, outcomeLabel, discoveryButtonLabel, type ReviewItem, type SchedulesResponse,
   runProgress, type AiStatus, type AiUsage, type Connector, type Deal, type ProposalRow, type Draft, type Evidence, type Metrics,
   type BoardRow, type CostSummary, type Filters, NO_FILTERS, applyFilters, type Profile, type Run, type RouteRow, type SourcePerformance,
 } from "@/lib/api";
+import { AutomationView, DraftsView, OnboardingView, ProposalsView, ReviewQueueView } from "./Actions";
 import { ContactsView, CostPanel, EngagementView, FilterBar, IntakeView, OperationsView, PipelineStages, RecordsView, ResearchDetail, SourcesView, SpendView } from "./Views";
 
 type Tab =
   | "overview" | "projects" | "agencies" | "partners" | "verify" | "contacts"
-  | "sources" | "spend" | "rejected" | "operations" | "research" | "intake" | "pipeline" | "proactive";
+  | "sources" | "spend" | "rejected" | "operations" | "research" | "intake" | "pipeline" | "proactive"
+  | "review" | "outreach" | "proposals" | "onboarding" | "automation";
 const TABS: [Tab, string][] = [
   ["overview", "Overview"], ["projects", "Active AI implementation opportunities"],
   ["agencies", "Agencies seeking delivery partners"], ["partners", "Verified & potential agency partners"],
@@ -19,6 +21,8 @@ const TABS: [Tab, string][] = [
   ["sources", "Discovery sources"], ["spend", "OpenAI & provider spend"],
   ["rejected", "Rejected / unqualified"], ["intake", "Manual intake"],
   ["operations", "Discovery operations"], ["research", "Research detail"],
+  ["review", "Review queue"], ["outreach", "Outreach drafts"], ["proposals", "Proposals"],
+  ["onboarding", "Onboarding"], ["automation", "Automation"],
 ];
 const FILTERED: Tab[] = ["projects", "agencies", "partners", "verify", "rejected"];
 
@@ -44,14 +48,19 @@ export default function Dashboard() {
   const [sources, setSources] = useState<SourcePerformance | null>(null);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [proposals, setProposals] = useState<ProposalRow[]>([]);
+  const [allDrafts, setAllDrafts] = useState<Draft[]>([]);
+  const [queue, setQueue] = useState<ReviewItem[]>([]);
+  const [schedules, setSchedules] = useState<SchedulesResponse | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [m, o, r, d, e, c, p, ai, au, b, co, ro, so, dl, pr] = await Promise.all([
+      const [m, o, r, d, e, c, p, ai, au, b, co, ro, so, dl, pr, ad, rq, sc] = await Promise.all([
         api.metrics(), api.opportunities(), api.runs(), api.drafts(),
         api.evidence(), api.connectors(), api.profiles(), api.aiStatus(), api.aiUsage(),
         api.board(), api.costs(), api.routes(), api.sources(), api.deals(), api.proposals(),
+        api.allDrafts(), api.reviewQueue(), api.schedules(),
       ]);
+      setAllDrafts(ad); setQueue(rq); setSchedules(sc);
       setBoard(b); setCosts(co); setRoutes(ro); setSources(so); setDeals(dl); setProposals(pr); setLoaded(true);
       setMetrics(m); setOpps(o); setRuns(r); setDrafts(d);
       setEvidence(e); setConnectors(c); setProfiles(p); setAiStatus(ai); setAiUsage(au); setError(null);
@@ -82,7 +91,7 @@ export default function Dashboard() {
       <header>
         <div>
           <h1>Personal AI GTM Command Center</h1>
-          <span className="muted">Development stage — mock by default; paid runs need explicit approval; nothing is ever sent</span>
+          <span className="muted">Paid providers stay off unless you approve them; nothing is ever sent automatically</span>
         </div>
         <button
           disabled={starting}
@@ -91,7 +100,7 @@ export default function Dashboard() {
             try { await api.startRun(); await load(); } finally { setStarting(false); }
           }}
         >
-          {starting ? "Queuing…" : "Run discovery (mock)"}
+          {starting ? "Queuing…" : discoveryButtonLabel(connectors)}
         </button>
       </header>
 
@@ -130,6 +139,11 @@ export default function Dashboard() {
         <OperationsView runs={runs} onCancel={async (id) => { await api.cancelRun(id); await load(); }} />
       )}
       {tab === "research" && <ResearchDetail id={selected} row={board.find((r) => r.id === selected)} onChanged={() => void load()} />}
+      {tab === "review" && <ReviewQueueView queue={queue} onOpen={open} onChanged={() => void load()} />}
+      {tab === "outreach" && <DraftsView drafts={allDrafts} onChanged={() => void load()} />}
+      {tab === "proposals" && <ProposalsView proposals={proposals} onChanged={() => void load()} />}
+      {tab === "onboarding" && <OnboardingView deals={deals} />}
+      {tab === "automation" && <AutomationView data={schedules} runs={runs} onChanged={() => void load()} />}
       {tab === "proactive" && <RecordsView rows={shown} view="proactive_prospect" onOpen={open}
         title="Proactive buyers (business triggers)"
         blurb="Organisations with an observable trigger (for example hiring AI engineers, or a planning notice). These are NOT requests and are never counted as active demand: research them, then decide whether to propose." />}
@@ -184,13 +198,13 @@ export default function Dashboard() {
           {drafts.map((d) => (
             <div className="item" key={d.id}>{d.subject ?? "(no subject)"}</div>
           ))}
-          <p className="muted">Approval is an admin-only API action recorded under the approver's name; the draft editor is not built yet.</p>
+          <p className="muted">Edit, approve (admin) or reject drafts in the “Outreach drafts” tab. Nothing is ever transmitted.</p>
         </div>
         <div className="card">
           <h2>Workflow runs</h2>
           {runs.slice(0, 6).map((r) => (
             <div className="item" key={r.id}>
-              <span className="badge">{r.status}</span>{r.kind}
+              <span className="badge">{outcomeLabel(r)}</span>{r.kind}
               <progress value={runProgress(r)} max={100} style={{ width: "100%" }} />
               <div className="muted">
                 {new Date(r.created_at).toLocaleString()} · attempt {r.attempts}

@@ -505,7 +505,7 @@ export function PipelineStages({ rows, proposals }: { rows: BoardRow[]; proposal
         ))}
       </div>
       <h2>Proposals ({proposals.length})</h2>
-      <p className="muted">Approval is an admin action on the API; sending is done by you, outside this system.</p>
+      <p className="muted">Edit and approve proposals in the Proposals tab (approval is an admin action); sending is done by you, outside this system.</p>
       {proposals.length === 0 ? <p className="muted">None yet.</p> : (
         <table><thead><tr><th>Proposal</th><th>Status</th><th>Price</th><th>Open items</th></tr></thead>
           <tbody>{proposals.map((p) => (

@@ -93,3 +93,51 @@ describe("pipeline stages", () => {
     expect(viewRows([r("t", "proactive_prospect"), r("a", "active_project")], "active_project").map((x) => x.id)).toEqual(["a"]);
   });
 });
+
+import { discoveryButtonLabel, outcomeLabel } from "./api";
+import { pickToken, sameOrigin } from "./proxyPolicy";
+
+describe("discoveryButtonLabel", () => {
+  const c = (name: string, o: Partial<{ enabled: boolean; is_mock: boolean; usable: boolean; paid: boolean }> = {}) =>
+    ({ name, enabled: true, is_mock: false, usable: true, paid: false, ...o });
+  it("never says mock when live sources would run", () => {
+    expect(discoveryButtonLabel([c("ted_api"), c("canadabuys")])).toBe("Run discovery (2 live sources, free)");
+    expect(discoveryButtonLabel([c("ted_api"), c("apify_x", { paid: true })])).toContain("1 PAID");
+  });
+  it("says mock only when only fixtures are enabled", () => {
+    expect(discoveryButtonLabel([c("mock_opportunities", { is_mock: true })])).toContain("mock fixtures only");
+    expect(discoveryButtonLabel([])).toContain("no source enabled");
+  });
+});
+
+describe("outcomeLabel", () => {
+  const run = (o: Partial<Run>): Run => ({ id: "r", kind: "k", status: "succeeded", attempts: 1, error: null, created_at: "", state: {}, ...o });
+  it("does not call a no-record or failed run a success", () => {
+    expect(outcomeLabel(run({ outcome: "no_matching_records" }))).toContain("no matching records");
+    expect(outcomeLabel(run({ status: "failed", outcome: "failed" }))).toBe("Failed");
+    expect(outcomeLabel(run({ outcome: "partial" }))).toContain("Partially");
+  });
+});
+
+describe("proxy policy", () => {
+  const env = { GTM_API_TOKEN: "op", GTM_ADMIN_API_TOKEN: "adm" };
+  const id = "11111111-1111-1111-1111-111111111111";
+  it("uses the admin token only for approvals and never for operator actions", () => {
+    expect(pickToken("POST", `proposals/${id}/approve`, env).token).toBe("adm");
+    expect(pickToken("POST", `drafts/${id}/approve`, env).token).toBe("adm");
+    expect(pickToken("POST", `opportunities/${id}/verify`, env).token).toBe("op");
+    expect(pickToken("PATCH", `proposals/${id}`, env).token).toBe("op");
+  });
+  it("refuses approvals when no admin token is configured, and unknown actions", () => {
+    expect(pickToken("POST", `drafts/${id}/approve`, { GTM_API_TOKEN: "op" }).forbidden).toContain("not configured");
+    expect(pickToken("POST", "capabilities", env).forbidden).toBeTruthy();
+    expect(pickToken("PATCH", "schedules/ted_api", env).token).toBe("adm");
+  });
+  it("rejects cross-origin mutating requests", () => {
+    const h = (m: Record<string, string>) => ({ headers: { get: (n: string) => m[n] ?? null } });
+    expect(sameOrigin(h({ origin: "https://evil.example", host: "dash.local" }))).toBe(false);
+    expect(sameOrigin(h({ origin: "http://dash.local", host: "dash.local" }))).toBe(true);
+    expect(sameOrigin(h({}))).toBe(false);
+    expect(sameOrigin(h({ "x-gtm-action": "1" }))).toBe(true);
+  });
+});

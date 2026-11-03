@@ -63,8 +63,8 @@ class _DiscoveryAgent:
     def _feedback_in(self, connector: DiscoveryConnector) -> None:
         """Order a search connector's queries by what they measurably produced before."""
         if hasattr(connector, "set_plan") and hasattr(connector, "planned"):
-            connector.query_log = {}
-            connector.set_plan(prefer_effective(self.session, connector.planned()))  # type: ignore[attr-defined]
+            setattr(connector, "query_log", {})
+            connector.set_plan(prefer_effective(self.session, connector.planned()))
 
     def _feedback_out(self, connector: DiscoveryConnector, cost: float) -> None:
         """Persist what each executed query retrieved (outcomes are attributed after triage)."""
