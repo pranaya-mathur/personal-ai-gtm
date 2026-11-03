@@ -28,7 +28,7 @@ from app.connectors.public_apis import ContractsFinderConnector, _client
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.models.enums import SourceCheckStatus
-from app.services.intent import classify_intent, is_excluded_source, page_date
+from app.services.intent import classify_intent, is_editorial, is_excluded_source, page_date
 from app.services.partnership import page_title, visible_text
 from app.services.routes import routes_from_html
 from app.services.source_check import USER_AGENT, SourceChecker
@@ -230,6 +230,9 @@ class SearchIntentConnector:
         status, body = page
         if status is not SourceCheckStatus.CONFIRMED:
             return None
+        if is_editorial(page_title(body) or hint, url):
+            log.info("intent_rejected", url=url, found="editorial", wanted=channel)
+            return None
         text = visible_text(body)
         intent = classify_intent(text, self.settings.topic_term_list)
         wanted = "agency_seeking" if channel == "agency" else "buyer_request"
@@ -256,6 +259,9 @@ class SearchIntentConnector:
 
 
 # ----------------------------------------------------------------------------- Apify SERP intent
+# Apify rejects pay-per-event runs whose maxTotalChargeUsd is below $0.50 (HTTP 400, 2026-11-03).
+# The user approved this floor; the real spend is bounded by the input and the reservation guard.
+PROVIDER_CAP_FLOOR_USD = 0.50
 GOOGLE_ACTOR = "apify/google-search-scraper"  # $0.0045/results page, $0.00005 start (FREE tier)
 BING_ACTOR = "tri_angle/bing-search-scraper"  # $0.0045/result, $0.0005 start (FREE tier)
 GOOGLE_PAGE_USD, GOOGLE_START_USD = 0.0045, 0.00005
@@ -337,7 +343,7 @@ class ApifySearchIntentConnector(SearchIntentConnector):
         pages = 0
         for engine, channel, queries in self._plan():
             actor = GOOGLE_ACTOR if engine == "google" else BING_ACTOR
-            cap = round(self._run_cost(engine, len(queries)), 4)
+            cap = max(round(self._run_cost(engine, len(queries)), 4), PROVIDER_CAP_FLOOR_USD)
             run = client.run_actor(actor, self._input(engine, queries, query), cap)
             used = run.get("usageTotalUsd")
             cost += float(used) if isinstance(used, int | float) else cap

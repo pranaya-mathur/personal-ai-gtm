@@ -45,10 +45,15 @@ class _DiscoveryAgent:
     agent_name: str
 
     def __init__(
-        self, session: Session, connectors: list[DiscoveryConnector], spend: SpendGuard
+        self,
+        session: Session,
+        connectors: list[DiscoveryConnector],
+        spend: SpendGuard,
+        cache: dict[str, DiscoveryResult] | None = None,
     ) -> None:
         self.session = session
         self.spend = spend
+        self.cache = cache if cache is not None else {}
         self.connectors = [c for c in connectors if c.kinds & self.kinds]
 
     def _call(
@@ -56,6 +61,8 @@ class _DiscoveryAgent:
     ) -> DiscoveryResult:
         """Each attempt reserves its own worst-case cost before it can spend anything; a failed
         attempt keeps its reservation (a provider may bill a run that errored)."""
+        if connector.name in self.cache:  # already fetched (and paid for) by the other agent
+            return self.cache[connector.name]
         for attempt in Retrying(
             retry=retry_if_exception_type(ConnectorError)
             & retry_if_not_exception_type(ConnectorRejected),
@@ -88,6 +95,7 @@ class _DiscoveryAgent:
                     raise
                 if reservation is not None:
                     self.spend.settle(reservation, result.actual_cost_usd)
+                self.cache[connector.name] = result
                 return result
         raise AssertionError("unreachable")  # pragma: no cover
 

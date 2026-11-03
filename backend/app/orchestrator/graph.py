@@ -95,9 +95,11 @@ def build_graph(
 
         return wrapped
 
+    discovery_cache: dict[str, Any] = {}  # one provider call per run, shared by both agents
+
     def discovery(agent_cls: type[Any]) -> Callable[[WorkflowState], dict[str, Any]]:
         def run(state: WorkflowState) -> dict[str, Any]:
-            result = agent_cls(session, connectors, spend).run(
+            result = agent_cls(session, connectors, spend, discovery_cache).run(
                 DiscoveryQuery(**state["query"]), uuid.UUID(state["run_id"])
             )
             ids = sorted(set(state.get("opportunity_ids", [])) | set(result["opportunity_ids"]))

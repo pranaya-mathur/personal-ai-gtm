@@ -799,7 +799,7 @@ def test_apify_intent_runs_two_engines_caps_each_run_and_reads_only_stated_reque
     res = c.discover(DiscoveryQuery())
     actors = [a for a, _ in fake.runs]
     assert sorted(set(actors)) == ["apify~google-search-scraper", "tri_angle~bing-search-scraper"]
-    assert all(float(cap) <= 0.06 for _, cap in fake.runs)  # a hard per-run maxTotalChargeUsd
+    assert all(float(cap) == 0.5 for _, cap in fake.runs)  # Apify's minimum ceiling, user-approved
     assert fake.inputs[0]["queries"] == "a1\na2" and fake.inputs[0]["maxPagesPerQuery"] == 1
     assert (
         "quickDateRange" in fake.inputs[0] and "quickDateRange" not in fake.inputs[2]
@@ -841,3 +841,63 @@ def test_provider_rejection_releases_the_reservation_and_is_not_retried(session)
     assert out["errors"] and "rejected" in out["errors"][0].lower()
     spent = [float(r.amount_usd) for r in session.execute(select(ProviderSpend)).scalars()]
     assert spent == [0.0]  # nothing was billed, so nothing stays reserved
+
+
+# ------------------------------------------------------------------ false positives seen in the paid search run
+def test_agency_marketing_blog_about_clients_needing_partners_is_not_a_request() -> None:
+    from app.services.intent import classify_intent, is_editorial
+
+    blog = "Series A teams with existing engineers need an AI product development partner that can embed and hand over smoothly."
+    assert classify_intent(blog, S.topic_term_list).kind != "agency_seeking"
+    assert is_editorial(
+        "How to Choose an AI Development Agency in 2026 | Anivia Labs",
+        "https://x.example/blog/how-to-choose",
+    )
+    assert is_editorial(
+        "Top 10 generative AI agent development companies", "https://x.example/top-10"
+    )
+    assert not is_editorial("Partners wanted", "https://agency.example/partners")
+
+
+def test_first_person_request_still_counts() -> None:
+    from app.services.intent import classify_intent
+
+    t = S.topic_term_list
+    assert (
+        classify_intent(
+            "We are looking for AI delivery partners and subcontractors for client work.", t
+        ).kind
+        == "agency_seeking"
+    )
+    assert (
+        classify_intent(
+            "Third party analysts are looking for a developer to build an AI agent.", t
+        ).kind
+        != "buyer_request"
+    )
+
+
+def test_a_connector_serving_both_agents_is_called_and_billed_once_per_run(session) -> None:  # type: ignore[no-untyped-def]
+    from app.connectors.base import CostEstimate, DiscoveryResult
+    from app.models import ProviderSpend
+
+    class Both:
+        name, is_mock = "apify_both", False
+        kinds = frozenset({SignalKind.PROJECT_REQUEST, SignalKind.PARTNER_ACTIVITY})
+        calls = 0
+
+        def estimate_cost(self, q):  # type: ignore[no-untyped-def]
+            return CostEstimate(usd=0.05)
+
+        def discover(self, q):  # type: ignore[no-untyped-def]
+            Both.calls += 1
+            return DiscoveryResult(provider=self.name, findings=[], actual_cost_usd=0.02)
+
+    s = Settings(database_url="sqlite://", apify_test_budget_usd=0.25)
+    enqueue_run(session, "full_discovery", {"query": {}})
+    run = claim_next_run(session)
+    assert run is not None
+    run = execute_run(session, run.id, [Both()], s)  # type: ignore[list-item]
+    assert run.status == "succeeded" and Both.calls == 1
+    spent = [float(r.amount_usd) for r in session.execute(select(ProviderSpend)).scalars()]
+    assert spent == [0.02]

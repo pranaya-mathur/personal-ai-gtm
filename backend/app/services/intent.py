@@ -35,6 +35,12 @@ _EXTERNAL = re.compile(
     r"freelance (?:developers?|engineers?)|agency partners?)\b",
     re.I,
 )
+_FIRST_PERSON = re.compile(r"\b(we|we're|we are|our|us|i'm|i am)\b", re.I)
+_EDITORIAL_TITLE = re.compile(
+    r"\b(how to (?:choose|hire|find|pick|select)|best \d*|top \d+|top-rated|guide|checklist|"
+    r"vs\.?|versus|reviews?|directory|ranking|list of|what is|why )\b",
+    re.I,
+)
 _OFFER = re.compile(
     r"\b(we (?:offer|provide|deliver|specialize|help|build|develop)\b|our (?:services|team of experts)|"
     r"hire us|get a (?:free )?quote|book a (?:free )?(?:call|demo)|trusted by|"
@@ -71,16 +77,31 @@ def _sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENT.split(text) if 25 <= len(s.strip()) <= 400]
 
 
+def is_editorial(title: str | None, url: str = "") -> bool:
+    """Listicles, guides and agency-selection articles describe a market; they are not requests."""
+    t = f"{title or ''} {url}"
+    return bool(_EDITORIAL_TITLE.search(t)) or any(
+        seg in url.lower() for seg in ("/best-", "/top-", "/directory", "/compare")
+    )
+
+
 def classify_intent(text: str, ai_terms: list[str]) -> Intent:
     sents = _sentences(text)
     ai = bool(find_terms(text, ai_terms))
     if _RECRUIT.search(text[:600]) and not _EXTERNAL.search(text):
         return Intent("recruitment", [])
-    seeking = [s for s in sents if _REQUEST.search(s) and _EXTERNAL.search(s)]
+    seeking = [
+        s for s in sents if _REQUEST.search(s) and _EXTERNAL.search(s) and _FIRST_PERSON.search(s)
+    ]  # the company itself must be the one asking
     if seeking and ai:
         return Intent("agency_seeking", seeking[:3])
     buyer = [
-        s for s in sents if _REQUEST.search(s) and _BUILD.search(s) and find_terms(s, ai_terms)
+        s
+        for s in sents
+        if _REQUEST.search(s)
+        and _BUILD.search(s)
+        and find_terms(s, ai_terms)
+        and _FIRST_PERSON.search(s)
     ]
     if buyer:
         return Intent("buyer_request", buyer[:3])
